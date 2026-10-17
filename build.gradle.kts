@@ -1,39 +1,108 @@
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
+import org.gradle.api.tasks.testing.logging.TestLogEvent
+
 plugins {
-    java
+    base
     alias(libs.plugins.spring.boot) apply false
     alias(libs.plugins.spring.dependency.management) apply false
 }
 
+description = "Telegram bot for coordinating car volunteers of animal shelter Priyut/Priyutino"
+group = "ru.priyut.coordination"
+version = providers.gradleProperty("projectVersion")
+    .orElse("0.1.0-SNAPSHOT")
+    .get()
+
+val javaVersion: Int = providers.gradleProperty("javaVersion")
+    .map { it.trim().toInt() }
+    .getOrElse(25)
+
+val jacocoVersion: String? = providers.gradleProperty("jacocoVersion").orNull
+
 allprojects {
-    group = "ru.priyut"
-    version = "0.1.0-SNAPSHOT"
+    group = rootProject.group
+    version = rootProject.version
+
+    // Если у вас репозитории уже объявлены в settings.gradle.kts
+    // через dependencyResolutionManagement, этот блок можно удалить.
+    repositories {
+        mavenCentral()
+    }
 }
 
 subprojects {
-    apply(plugin = "java")
-    apply(plugin = "io.spring.dependency-management")
+    val currentProject = this
 
-    java {
-        toolchain {
-            languageVersion = JavaLanguageVersion.of(25)
+    plugins.withId("java") {
+        currentProject.extensions.configure<JavaPluginExtension> {
+            toolchain {
+                languageVersion.set(
+                    JavaLanguageVersion.of(javaVersion)
+                )
+            }
+        }
+
+        currentProject.tasks.withType<JavaCompile>().configureEach {
+            options.encoding = "UTF-8"
+            options.compilerArgs.add("-parameters")
+            options.release.set(javaVersion)
+        }
+
+        currentProject.tasks.withType<Javadoc>().configureEach {
+            options.encoding = "UTF-8"
+        }
+
+        currentProject.tasks.withType<Test>().configureEach {
+            useJUnitPlatform()
+
+            systemProperty("file.encoding", "UTF-8")
+
+            testLogging {
+                events = setOf(
+                    TestLogEvent.PASSED,
+                    TestLogEvent.SKIPPED,
+                    TestLogEvent.FAILED
+                )
+                showExceptions = true
+                exceptionFormat = TestExceptionFormat.FULL
+            }
+
+            reports.junitXml.required.set(true)
+            reports.html.required.set(true)
+
+            maxParallelForks = (Runtime.getRuntime().availableProcessors() / 2).coerceAtLeast(1)
+        }
+
+        currentProject.pluginManager.apply("jacoco")
+
+        currentProject.extensions.configure<JacocoPluginExtension> {
+            if (jacocoVersion != null) {
+                toolVersion = jacocoVersion
+            }
+        }
+
+        currentProject.tasks.withType<JacocoReport>().configureEach {
+            reports.xml.required.set(true)
+            reports.html.required.set(true)
+        }
+
+        currentProject.tasks.named("test") {
+            finalizedBy("jacocoTestReport")
+        }
+
+        currentProject.tasks.named("check") {
+            dependsOn("jacocoTestReport")
         }
     }
 
-    // Версии зависимостей Spring Boot берутся из BOM
-    configure<io.spring.gradle.dependencymanagement.dsl.DependencyManagementExtension> {
-        imports {
-            mavenBom(org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES)
-        }
+    plugins.withId("org.springframework.boot") {
+        currentProject.pluginManager.apply("io.spring.dependency-management")
     }
+}
 
-    tasks.withType<JavaCompile>().configureEach {
-        options.encoding = "UTF-8"
-    }
+tasks.withType<Wrapper>().configureEach {
+    gradleVersion = providers.gradleProperty("gradleVersion")
+        .getOrElse("9.0.0")
 
-    tasks.withType<Test>().configureEach {
-        useJUnitPlatform()
-        testLogging {
-            events("passed", "skipped", "failed")
-        }
-    }
+    distributionType = Wrapper.DistributionType.ALL
 }
