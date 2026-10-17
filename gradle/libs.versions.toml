@@ -30,8 +30,9 @@ telegram-bots-longpolling = { module = "org.telegram:telegrambots-longpolling", 
 telegram-bots-client = { module = "org.telegram:telegrambots-client", version.ref = "telegram-bots" }
 
 # Testcontainers
-testcontainers-postgresql = { module = "org.testcontainers:postgresql" }
-testcontainers-junit-jupiter = { module = "org.testcontainers:junit-jupiter" }
+testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }
+testcontainers-postgresql = { module = "org.testcontainers:postgresql", version.ref = "testcontainers" }
+testcontainers-junit-jupiter = { module = "org.testcontainers:junit-jupiter", version.ref = "testcontainers" }
 
 # Тестирование: эмуляция внешних HTTP-сервисов
 wiremock-standalone = { module = "org.wiremock:wiremock-standalone", version.ref = "wiremock" }
