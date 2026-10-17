@@ -15,7 +15,6 @@ dependencies {
     implementation(libs.spring.boot.starter.web)
     implementation(libs.spring.boot.starter.actuator)
     implementation(libs.micrometer.registry.prometheus)
-    implementation(libs.spring.boot.starter.aop)
 
     // Database (JDBC)
     implementation(libs.spring.boot.starter.jdbc)
