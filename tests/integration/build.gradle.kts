@@ -8,7 +8,7 @@ dependencies {
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation(libs.testcontainers.postgresql)
-    testImplementation(libs.wiremock)
+    testImplementation(libs.wiremock.standalone)
     testImplementation(libs.awaitility)
 }
 

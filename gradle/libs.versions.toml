@@ -5,6 +5,8 @@ spring-dependency-management = "1.1.7"
 # Тестирование
 testcontainers = "1.21.3"
 telegram-bots = "8.0.0"
+wiremock = "3.13.1"
+awaitility = "4.3.0"
 
 [libraries]
 # Spring Boot Starters
@@ -30,6 +32,12 @@ telegram-bots-client = { module = "org.telegram:telegrambots-client", version.re
 # Testcontainers
 testcontainers-postgresql = { module = "org.testcontainers:postgresql" }
 testcontainers-junit-jupiter = { module = "org.testcontainers:junit-jupiter" }
+
+# Тестирование: эмуляция внешних HTTP-сервисов
+wiremock-standalone = { module = "org.wiremock:wiremock-standalone", version.ref = "wiremock" }
+
+# Тестирование: ожидание асинхронных операций
+awaitility = { module = "org.awaitility:awaitility", version.ref = "awaitility" }
 
 [plugins]
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
