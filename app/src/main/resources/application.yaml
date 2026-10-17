@@ -2,6 +2,13 @@ server:
   port: 8080
   shutdown: graceful
 
+spring:
+  main:
+    banner_mode: 'off'
+  application:
+    name: priyut-coordination-bot
+
+
 management:
   endpoint:
     health:

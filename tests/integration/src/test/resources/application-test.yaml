@@ -1,0 +1,28 @@
+spring:
+  datasource:
+    # Эти значения будут динамически переопределены через @DynamicPropertySource в IntegrationTestBase
+    # Оставляем заглушки, чтобы Spring Boot не падал при инициализации контекста до запуска контейнера
+    url: jdbc:postgresql://localhost:5432/priyut_test
+    username: test
+    password: test
+  flyway:
+    # КРИТИЧНО: очищаем схему БД перед каждым тестом для полной изоляции
+    clean-disabled: false
+    locations: classpath:db/migration
+
+# Настройки Telegram-бота для тестовой среды
+priyut:
+  telegram:
+    bot:
+      token: "TEST_TOKEN"
+      username: "test_bot"
+    # URL API будет динамически переопределен в WireMockConfig на localhost с нужным портом
+    api-url: "http://localhost:0"
+
+logging:
+  level:
+    root: WARN
+    ru.priyut.coordination: INFO
+    org.testcontainers: INFO
+    org.flywaydb: INFO
+    com.github.tomakehurst.wiremock: WARN
