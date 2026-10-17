@@ -10,6 +10,6 @@ tasks.named<Jar>("jar") {
     archiveClassifier.set("") // Убираем суффикс -plain
 }
 
-tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
+tasks.named<AbstractArchiveTask>("bootJar") {
     enabled = false
 }
