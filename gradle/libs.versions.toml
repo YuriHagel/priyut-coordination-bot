@@ -13,6 +13,7 @@ spring-boot-starter-jdbc = { module = "org.springframework.boot:spring-boot-star
 spring-boot-starter-validation = { module = "org.springframework.boot:spring-boot-starter-validation" }
 spring-boot-starter-actuator = { module = "org.springframework.boot:spring-boot-starter-actuator" }
 spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test" }
+spring-boot-starter-aop = { module = "org.springframework.boot:spring-boot-starter-aop" }
 
 # Metrics
 micrometer-registry-prometheus = { module = "io.micrometer:micrometer-registry-prometheus" }

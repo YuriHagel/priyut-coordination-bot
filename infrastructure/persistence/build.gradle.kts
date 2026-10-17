@@ -3,7 +3,7 @@ plugins {
 }
 
 dependencies {
-    api(libs.spring.boot.starter.data.jpa)
+    api(libs.spring.boot.starter.jdbc)
     api(libs.flyway.core)
     api(libs.flyway.database.postgresql)
     runtimeOnly(libs.postgresql)
