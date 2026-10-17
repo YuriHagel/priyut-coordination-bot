@@ -1,2 +1,16 @@
 services:
+  postgres:
+    image: postgres:15
+    container_name: priyut-postgres
+    environment:
+      POSTGRES_DB: priyut
+      POSTGRES_USER: priyut
+      POSTGRES_PASSWORD: priyut
+    ports:
+      - "5432:5432"
+    volumes:
+      - priyut-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  priyut-postgres-data:
   
