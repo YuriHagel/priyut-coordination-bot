@@ -8,8 +8,10 @@ plugins {
 }
 
 dependencies {
+
+    testFixturesApi(platform("org.springframework.boot:spring-boot-dependencies:4.1.1"))
+
     // 1. Зависимости, необходимые ТОЛЬКО для компиляции самих фикстур
-    // (Фикстуры создают доменные объекты и реализуют порты приложения)
     testFixturesImplementation(project(":domain"))
     testFixturesImplementation(project(":application"))
 

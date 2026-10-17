@@ -3,9 +3,16 @@ plugins {
     id("org.springframework.boot")
 }
 
+val catalogs = extensions.getByType<VersionCatalogsExtension>()
+val libsCatalog = catalogs.named("libs")
+
+val springBootVersion = libsCatalog.findVersion("spring-boot")
+    .map { it.requiredVersion }
+    .orElseThrow { GradleException("Версия 'spring-boot' не найдена в каталоге libs.versions.toml") }
 
 dependencies {
-    implementation(platform("org.springframework.boot:spring-boot-dependencies:${libs.versions.spring.boot.get()}"))
+    // Подставляем полученную строку версии
+    implementation(platform("org.springframework.boot:spring-boot-dependencies:$springBootVersion"))
 }
 
 // Библиотечные модули не должны собираться как исполняемые Spring Boot JAR
