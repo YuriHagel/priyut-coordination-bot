@@ -9,4 +9,11 @@ dependencyResolutionManagement {
         gradlePluginPortal()
         mavenCentral()
     }
+
+    // Пробрасываем файл libs.versions.toml из корня основного проекта в build-logic
+    versionCatalogs {
+        create("libs") {
+            from(files("../gradle/libs.versions.toml"))
+        }
+    }
 }
