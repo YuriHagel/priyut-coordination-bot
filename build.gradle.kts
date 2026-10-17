@@ -22,12 +22,6 @@ val jacocoVersion: String? = providers.gradleProperty("jacocoVersion").orNull
 allprojects {
     group = rootProject.group
     version = rootProject.version
-
-    // Если у вас репозитории уже объявлены в settings.gradle.kts
-    // через dependencyResolutionManagement, этот блок можно удалить.
-    repositories {
-        mavenCentral()
-    }
 }
 
 subprojects {

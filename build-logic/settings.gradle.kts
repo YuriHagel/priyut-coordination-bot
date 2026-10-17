@@ -1,14 +1,10 @@
-rootProject.name = "priyut-coordination-bot"
+rootProject.name = "build-logic"
 
-includeBuild("build-logic")
-
-include(
-    "app",
-    "domain",
-    "application",
-    "infrastructure:persistence",
-    "infrastructure:telegram",
-    "infrastructure:scheduling",
-    "tests:test-fixtures",
-    "tests:integration-tests"
-)
+dependencyResolutionManagement {
+    // Запрещаем подпроектам build-logic объявлять свои репозитории
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}

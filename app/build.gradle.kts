@@ -1,23 +1,27 @@
 plugins {
-    java
-    alias(libs.plugins.spring.boot)
-    alias(libs.plugins.spring.dependency.management)
+    id("priyut.spring-conventions")
+    id("priyut.test-conventions")
+    // ... другие плагины
 }
 
 dependencies {
-    implementation(project(":domain"))
-    implementation(project(":application"))
-    implementation(project(":infrastructure:persistence"))
-    implementation(project(":infrastructure:telegram"))
-    implementation(project(":infrastructure:scheduling"))
-
-    implementation("org.springframework.boot:spring-boot-starter")
-    implementation("org.springframework.boot:spring-boot-starter-data-jpa")
-    implementation("org.springframework.boot:spring-boot-starter-validation")
-
-    runtimeOnly(libs.postgresql)
-    runtimeOnly(libs.flyway.core)
-    runtimeOnly(libs.flyway.postgresql)
-
-    testImplementation("org.springframework.boot:spring-boot-starter-test")
+    // ... ваши зависимости (web, jdbc, prometheus, modules)
 }
+
+// ПЕРЕОПРЕДЕЛЕНИЕ ДЛЯ ТОЧКИ ВХОДА (APP)
+// Включаем создание исполняемого fat-jar и отключаем обычный jar
+tasks.named<Jar>("jar") {
+    enabled = false
+}
+
+tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
+    enabled = true
+    archiveClassifier.set("") // Убираем суффикс, чтобы файл назывался просто app.jar
+}
+
+tasks.withType<Jar>().configureEach {
+    if (name == "jar") {
+        enabled = false
+    }
+}
+
