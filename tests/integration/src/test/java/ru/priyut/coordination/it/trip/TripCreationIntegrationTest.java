@@ -5,7 +5,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import ru.priyut.coordination.application.port.in.CreateTripUseCase;
 import ru.priyut.coordination.application.port.in.PublishTripUseCase;
-import ru.priyut.coordination.application.port.out.TripRepository;
+import ru.priyut.coordination.application.port.outbound.TripRepository;
 import ru.priyut.coordination.domain.trip.Trip;
 import ru.priyut.coordination.domain.trip.TripStatus;
 import ru.priyut.coordination.domain.trip.TripType;
@@ -30,7 +30,7 @@ class TripCreationIntegrationTest extends IntegrationTestBase {
     private TripRepository tripRepository;
 
     @MockBean
-    private ru.priyut.coordination.application.port.out.TelegramGateway telegramGateway;
+    private ru.priyut.coordination.application.port.outbound.TelegramGateway telegramGateway;
 
     @Test
     void shouldCreateDraftAndPublishTripSuccessfully() {

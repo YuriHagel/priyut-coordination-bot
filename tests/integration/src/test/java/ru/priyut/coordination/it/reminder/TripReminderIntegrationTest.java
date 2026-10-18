@@ -6,7 +6,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import ru.priyut.coordination.application.port.in.AssignVolunteerUseCase;
 import ru.priyut.coordination.application.port.in.CreateTripUseCase;
-import ru.priyut.coordination.application.port.out.TripRepository;
+import ru.priyut.coordination.application.port.outbound.TripRepository;
 import ru.priyut.coordination.domain.trip.Trip;
 import ru.priyut.coordination.infrastructure.scheduling.service.TripReminderService; // Адаптируйте под ваше имя сервиса
 import ru.priyut.coordination.support.IntegrationTestBase;
@@ -35,7 +35,7 @@ class TripReminderIntegrationTest extends IntegrationTestBase {
     private TripRepository tripRepository;
 
     @MockBean
-    private ru.priyut.coordination.application.port.out.TelegramGateway telegramGateway;
+    private ru.priyut.coordination.application.port.outbound.TelegramGateway telegramGateway;
 
     @Test
     void shouldSend24HourReminderAndPreventDuplicates() {

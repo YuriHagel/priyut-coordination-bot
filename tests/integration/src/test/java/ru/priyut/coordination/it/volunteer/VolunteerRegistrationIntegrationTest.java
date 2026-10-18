@@ -4,8 +4,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import ru.priyut.coordination.application.port.in.RegisterVolunteerUseCase;
-import ru.priyut.coordination.application.port.out.ConsentRepository;
-import ru.priyut.coordination.application.port.out.VolunteerRepository;
+import ru.priyut.coordination.application.port.outbound.ConsentRepository;
+import ru.priyut.coordination.application.port.outbound.VolunteerRepository;
 import ru.priyut.coordination.domain.volunteer.Volunteer;
 import ru.priyut.coordination.domain.volunteer.VolunteerStatus;
 import ru.priyut.coordination.support.IntegrationTestBase;
@@ -30,7 +30,7 @@ class VolunteerRegistrationIntegrationTest extends IntegrationTestBase {
     private ConsentRepository consentRepository;
 
     @MockBean
-    private ru.priyut.coordination.application.port.out.TelegramGateway telegramGateway;
+    private ru.priyut.coordination.application.port.outbound.TelegramGateway telegramGateway;
 
     @Test
     void shouldRegisterVolunteerAndSaveConsent() {
