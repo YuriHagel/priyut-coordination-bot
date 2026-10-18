@@ -6,12 +6,15 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import ru.priyut.coordination.domain.consent.Consent;
 import ru.priyut.coordination.domain.consent.ConsentAuditEntry;
+import ru.priyut.coordination.domain.consent.ConsentVersion;
 import ru.priyut.coordination.domain.shared.TelegramId;
+import ru.priyut.coordination.infrastructure.persistence.mapper.ConsentMapper;
 import ru.priyut.coordination.infrastructure.persistence.record.ConsentAuditRecord;
 import ru.priyut.coordination.infrastructure.persistence.record.ConsentRecord;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -25,13 +28,25 @@ public class JdbcConsentRepository {
         this.jdbcTemplate = jdbcTemplate;
     }
 
+    /**
+     * Находит согласие по Telegram ID и преобразует Record в доменный объект.
+     */
     public Optional<Consent> findByTelegramId(TelegramId telegramId) {
         var sql = "SELECT * FROM consents WHERE telegram_id = :telegramId";
         var params = new MapSqlParameterSource().addValue("telegramId", telegramId.value());
+
+        // 1. Получаем List<ConsentRecord>
         var records = jdbcTemplate.query(sql, params, new ConsentRowMapper());
-        return records.stream().findFirst(); // Упрощённо, без маппера
+
+        // 2. Берем первый элемент и маппим его в доменный объект Consent
+        return records.stream()
+                .findFirst()
+                .map(ConsentMapper::toDomain);
     }
 
+    /**
+     * Сохраняет или обновляет согласие (UPSERT).
+     */
     public Consent save(Consent consent) {
         var sql = """
                 INSERT INTO consents (
@@ -63,6 +78,9 @@ public class JdbcConsentRepository {
         return consent;
     }
 
+    /**
+     * Сохраняет запись в журнале аудита 152-ФЗ.
+     */
     public void saveAuditEntry(ConsentAuditEntry entry) {
         var sql = """
                 INSERT INTO consent_audit (
@@ -87,23 +105,28 @@ public class JdbcConsentRepository {
         jdbcTemplate.update(sql, params);
     }
 
+    /**
+     * Получает историю аудита для пользователя.
+     */
     public List<ConsentAuditEntry> findAuditEntriesByTelegramId(TelegramId telegramId) {
         var sql = "SELECT * FROM consent_audit WHERE telegram_id = :telegramId ORDER BY occurred_at DESC";
         var params = new MapSqlParameterSource().addValue("telegramId", telegramId.value());
+
         var records = jdbcTemplate.query(sql, params, new ConsentAuditRowMapper());
+
         return records.stream().map(this::toAuditEntry).toList();
     }
 
+    // === Вспомогательные методы маппинга ===
+
     private ConsentAuditEntry toAuditEntry(ConsentAuditRecord record) {
-        var version = record.consentVersion() != null
-                ? ru.priyut.coordination.domain.consent.ConsentVersion.of(
-                record.consentVersion(),
-                record.consentDocumentName() != null ? record.consentDocumentName() : ""
-        )
-                : null;
+        ConsentVersion version = null;
+        if (record.consentVersion() != null) {
+            version = ConsentVersion.of(record.consentVersion(), record.consentDocumentName() != null ? record.consentDocumentName() : "");
+        }
 
         return ConsentAuditEntry.of(
-                record.telegramId() != null ? TelegramId.of(record.telegramId()) : null,
+                TelegramId.of(record.telegramId()),
                 ConsentAuditEntry.AuditAction.valueOf(record.action()),
                 version,
                 record.occurredAt(),
@@ -112,6 +135,9 @@ public class JdbcConsentRepository {
         );
     }
 
+    /**
+     * Маппер строки ResultSet в Record (только для чтения из БД).
+     */
     private static class ConsentRowMapper implements RowMapper<ConsentRecord> {
         @Override
         public ConsentRecord mapRow(ResultSet rs, int rowNum) throws SQLException {
@@ -126,12 +152,15 @@ public class JdbcConsentRepository {
             );
         }
 
-        private java.time.Instant getInstantOrNull(ResultSet rs, String column) throws SQLException {
+        private Instant getInstantOrNull(ResultSet rs, String column) throws SQLException {
             var timestamp = rs.getTimestamp(column);
             return timestamp != null ? timestamp.toInstant() : null;
         }
     }
 
+    /**
+     * Маппер строки ResultSet в Record для аудита.
+     */
     private static class ConsentAuditRowMapper implements RowMapper<ConsentAuditRecord> {
         @Override
         public ConsentAuditRecord mapRow(ResultSet rs, int rowNum) throws SQLException {
