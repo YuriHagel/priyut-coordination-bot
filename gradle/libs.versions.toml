@@ -6,6 +6,7 @@ testcontainers = "1.21.3"
 telegram-bots = "8.0.0"
 wiremock = "3.13.1"
 awaitility = "4.3.0"
+resilience4j = "2.4.0"
 
 [libraries]
 # Spring Boot Starters
@@ -21,6 +22,10 @@ spring-tx = { module = "org.springframework:spring-tx" }
 
 # Metrics
 micrometer-registry-prometheus = { module = "io.micrometer:micrometer-registry-prometheus" }
+
+# Resilience4j (Rate Limiting, Retry, Circuit Breaker)
+resilience4j-spring-boot4 = { module = "io.github.resilience4j:resilience4j-spring-boot4", version.ref = "resilience4j" }
+resilience4j-micrometer = { module = "io.github.resilience4j:resilience4j-micrometer", version.ref = "resilience4j" }
 
 # Database & Migrations
 flyway-core = { module = "org.flywaydb:flyway-core" }
