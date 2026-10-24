@@ -3,14 +3,12 @@ package ru.priyut.coordination.infrastructure.telegram.admin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import ru.priyut.coordination.application.port.outbound.TripRepository;
+import ru.priyut.coordination.application.port.outbound.TelegramGateway;
 import ru.priyut.coordination.domain.shared.TelegramId;
 import ru.priyut.coordination.domain.trip.Trip;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
-import java.io.StringWriter;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 
@@ -25,11 +23,11 @@ public class ExportTripsHandler implements AdminCommandHandler {
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     private final TripRepository tripRepository;
-    private final TelegramBotGatewayImpl telegramGateway;
+    private final TelegramGateway telegramGateway; // ✅ Внедряем интерфейс
 
     public ExportTripsHandler(
             TripRepository tripRepository,
-            TelegramBotGatewayImpl telegramGateway
+            TelegramGateway telegramGateway
     ) {
         this.tripRepository = tripRepository;
         this.telegramGateway = telegramGateway;
@@ -49,36 +47,32 @@ public class ExportTripsHandler implements AdminCommandHandler {
     public void handle(Update update, TelegramId telegramId) {
         log.info("Admin {} requested trips export", telegramId);
 
-        // Получаем все завершённые поездки
         var trips = tripRepository.findByStatus(ru.priyut.coordination.domain.trip.TripStatus.COMPLETED);
 
         if (trips.isEmpty()) {
-            var msg = SendMessage.builder()
-                    .chatId(String.valueOf(telegramId.value()))
-                    .text("ℹ️ Нет завершённых поездок для экспорта.")
-                    .build();
-            telegramGateway.execute(msg);
+            // ✅ Используем sendMessage вместо execute
+            telegramGateway.sendMessage(telegramId, "ℹ️ Нет завершённых поездок для экспорта.");
             return;
         }
 
         // Генерируем CSV
         var csv = generateCsv(trips);
 
-        // Отправляем как сообщение (для MVP; в production — как документ)
-        var msg = SendMessage.builder()
-                .chatId(String.valueOf(telegramId.value()))
-                .text("📊 Экспорт поездок (" + trips.size() + " записей):\n\n" +
-                        "```\n" + csv + "\n```")
-                .parseMode("Markdown");
-        telegramGateway.execute(msg);
+        // ✅ Отправляем как текстовое сообщение
+        // Примечание: Markdown-форматирование не применяется, так как в TelegramGateway
+        // нет метода с parseMode. Для MVP это приемлемо — CSV будет читаемым.
+        var text = "📊 Экспорт поездок (" + trips.size() + " записей):\n\n" + csv;
+        telegramGateway.sendMessage(telegramId, text);
+
+        // ❌ answerCallbackQuery НЕ нужен — это command handler, а не callback
     }
 
     private String generateCsv(List<Trip> trips) {
-        var writer = new StringWriter();
-        writer.write("id,date_time,route,task,type,status,volunteer_id\n");
+        var sb = new StringBuilder();
+        sb.append("id,date_time,route,task,type,status,volunteer_id\n");
 
         for (Trip trip : trips) {
-            writer.write(String.format("%d,%s,%s,%s,%s,%s,%s\n",
+            sb.append(String.format("%d,%s,%s,%s,%s,%s,%s\n",
                     trip.getId().value().getMostSignificantBits(),
                     trip.getTripDateTime().format(DATE_FORMATTER),
                     escapeCsv(trip.getRoute().formatted()),
@@ -91,7 +85,7 @@ public class ExportTripsHandler implements AdminCommandHandler {
             ));
         }
 
-        return writer.toString();
+        return sb.toString();
     }
 
     private String escapeCsv(String value) {
