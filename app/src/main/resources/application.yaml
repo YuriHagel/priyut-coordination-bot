@@ -31,3 +31,27 @@ management:
   health:
     db:
       enabled: false
+
+priyut:
+  telegram:
+    bot:
+      # ⚠️ Токен из переменной окружения (НЕ коммитить в репозиторий!)
+      token: ${BOT_TOKEN:}
+      username: ${BOT_USERNAME:priyut_coordination_bot}
+      api-url: ${TELEGRAM_API_URL:https://api.telegram.org}
+      # Белый список администраторов (через запятую)
+      admin-telegram-ids: ${ADMIN_TELEGRAM_IDS:}
+      enabled: true
+    retry:
+      max-attempts: 3
+      wait-duration: 2s
+      backoff-multiplier: 2.0
+    rate-limit:
+      messages-per-second: 30
+      timeout-duration: 5s
+    polling:
+      timeout-seconds: 50
+      updates-limit: 100
+      allowed-updates:
+        - message
+        - callback_query
