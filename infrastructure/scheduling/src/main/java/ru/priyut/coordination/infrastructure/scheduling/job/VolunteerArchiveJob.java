@@ -1,5 +1,6 @@
 package ru.priyut.coordination.infrastructure.scheduling.job;
 
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -47,39 +48,43 @@ public class VolunteerArchiveJob {
             return;
         }
 
-        var timer = metrics.getJobDurationTimer(JOB_NAME).sample();
-        try {
-            log.debug("🕐 Starting volunteer archive job");
+        // ✅ Используем timer.record() для чистого и безопасного замера времени
+        Timer timer = metrics.getJobDurationTimer(JOB_NAME);
 
-            // Ищем активных волонтёров с последней активностью старше 3 лет
-            List<Volunteer> candidates = List.of(
-                    volunteerRepository.findByStatus(VolunteerStatus.ACTIVE).toArray(new Volunteer[0])
-            );
+        timer.record(() -> {
+            try {
+                log.debug("🕐 Starting volunteer archive job");
 
-            var now = clock.now();
-            int archived = 0;
+                // Ищем активных волонтёров с последней активностью старше 3 лет
+                List<Volunteer> candidates = List.of(
+                        volunteerRepository.findByStatus(VolunteerStatus.ACTIVE).toArray(new Volunteer[0])
+                );
 
-            for (Volunteer volunteer : candidates) {
-                if (Duration.between(volunteer.getLastActivityAt(), now).compareTo(INACTIVITY_THRESHOLD) >= 0) {
-                    try {
-                        volunteer.archive(now);
-                        volunteerRepository.save(volunteer);
-                        metrics.recordArchive();
-                        archived++;
-                        log.info("📦 Archived volunteer {} (inactive since {})",
-                                volunteer.getTelegramId(), volunteer.getLastActivityAt());
-                    } catch (Exception e) {
-                        log.error("❌ Failed to archive volunteer {}", volunteer.getTelegramId(), e);
+                var now = clock.now();
+                int archived = 0;
+
+                for (Volunteer volunteer : candidates) {
+                    if (Duration.between(volunteer.getLastActivityAt(), now).compareTo(INACTIVITY_THRESHOLD) >= 0) {
+                        try {
+                            volunteer.archive(now);
+                            volunteerRepository.save(volunteer);
+                            metrics.recordArchive();
+                            archived++;
+                            log.info("📦 Archived volunteer {} (inactive since {})",
+                                    volunteer.getTelegramId(), volunteer.getLastActivityAt());
+                        } catch (Exception e) {
+                            log.error("❌ Failed to archive volunteer {}", volunteer.getTelegramId(), e);
+                        }
                     }
                 }
-            }
 
-            log.info("✅ Volunteer archive job completed. Archived: {}", archived);
-        } catch (Exception e) {
-            log.error("❌ Volunteer archive job failed", e);
-        } finally {
-            timer.stop(metrics.getJobDurationTimer(JOB_NAME));
-            lock.unlock(JOB_NAME);
-        }
+                log.info("✅ Volunteer archive job completed. Archived: {}", archived);
+            } catch (Exception e) {
+                log.error("❌ Volunteer archive job failed", e);
+            } finally {
+                // Гарантированно освобождаем блокировку
+                lock.unlock(JOB_NAME);
+            }
+        });
     }
 }

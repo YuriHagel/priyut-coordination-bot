@@ -1,5 +1,6 @@
 package ru.priyut.coordination.infrastructure.scheduling.job;
 
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -10,13 +11,8 @@ import ru.priyut.coordination.infrastructure.scheduling.service.SchedulingMetric
 
 /**
  * Фоновая задача отправки напоминаний о поездках.
- *
  * Запускается каждые 15 минут, но реально отправляет напоминания только тем,
  * у кого поездка через 24 или 2 часа (окно поиска ±30 минут).
- *
- * УСТОЙЧИВОСТЬ К ПЕРЕЗАПУСКУ:
- * - Если приложение перезапустилось, задача продолжит работать
- * - Идемпотентность обеспечивается флагами в Trip (reminder24hSent, reminder2hSent)
  */
 @Component
 public class TripReminderJob {
@@ -40,21 +36,26 @@ public class TripReminderJob {
 
     @Scheduled(fixedRate = 900_000) // Каждые 15 минут
     public void execute() {
+        // Если задача уже выполняется, просто выходим (не замеряем это как выполнение)
         if (!lock.tryLock(JOB_NAME)) {
             return;
         }
 
-        var timer = metrics.getJobDurationTimer(JOB_NAME);
-        try {
-            log.debug("🕐 Starting trip reminder job");
-            reminderService.send24HourReminders();
-            reminderService.send2HourReminders();
-            log.debug("✅ Trip reminder job completed");
-        } catch (Exception e) {
-            log.error("❌ Trip reminder job failed", e);
-        } finally {
-            timer.stop(metrics.getJobDurationTimer(JOB_NAME));
-            lock.unlock(JOB_NAME);
-        }
+        // ✅ Используем timer.record() для чистого и безопасного замера времени
+        Timer timer = metrics.getJobDurationTimer(JOB_NAME);
+
+        timer.record(() -> {
+            try {
+                log.debug("🕐 Starting trip reminder job");
+                reminderService.send24HourReminders();
+                reminderService.send2HourReminders();
+                log.debug("✅ Trip reminder job completed");
+            } catch (Exception e) {
+                log.error("❌ Trip reminder job failed", e);
+            } finally {
+                // Гарантированно освобождаем блокировку
+                lock.unlock(JOB_NAME);
+            }
+        });
     }
 }

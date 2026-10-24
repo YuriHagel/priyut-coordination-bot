@@ -9,6 +9,7 @@ dependencies {
 
     // Spring Context для @Scheduled и @EnableScheduling
     implementation(libs.spring.context)
+    implementation(libs.spring.tx)
 
     implementation(libs.slf4j.api)
 

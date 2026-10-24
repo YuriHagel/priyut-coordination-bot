@@ -131,12 +131,15 @@ public class ReminderService {
                         "Volunteer " + trip.getAssignedVolunteerId() + " not found"));
 
         String text = String.format(
-                "⏰ НАПОМИНАНИЕ (за %d часа)\n\n" +
-                        "📋 Поездка #%d\n" +
-                        "📍 %s\n" +
-                        "🕐 %s\n" +
-                        "🐾 %s\n\n" +
-                        "Если вы не сможете поехать — нажмите кнопку ниже.",
+                """
+                        ⏰ НАПОМИНАНИЕ (за %d часа)
+                        
+                        📋 Поездка #%d
+                        📍 %s
+                        🕐 %s
+                        🐾 %s
+                        
+                        Если вы не сможете поехать — нажмите кнопку ниже.""",
                 hoursBefore,
                 trip.getId().value().getMostSignificantBits(),
                 trip.getRoute().formatted(),
