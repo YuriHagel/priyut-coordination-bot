@@ -83,19 +83,23 @@ public class TelegramBotGatewayImpl implements TelegramGateway {
                 sendMessage(recipient, text);
                 successCount++;
 
-                // Небольшая пауза для снижения нагрузки на API.
-                // В production для больших объемов лучше использовать BatchMessageDispatcher с Resilience4j RateLimiter.
+                // Небольшая пауза для снижения нагрузки на API
                 Thread.sleep(50);
+
+            } catch (InterruptedException e) {
+                // 1. СНАЧАЛА специфичное исключение
+                Thread.currentThread().interrupt(); // Восстанавливаем флаг прерывания
+                log.error("Broadcast interrupted");
+                throw new RuntimeException("Broadcast interrupted", e);
+
             } catch (Exception e) {
+                // 2. ПОТОМ общее исключение (ловит всё остальное)
                 failCount++;
                 log.error("❌ Failed to broadcast to user {}: {}", recipient, e.getMessage());
                 // Не прерываем цикл, чтобы отправить сообщение остальным
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.error("Broadcast interrupted");
-                throw new RuntimeException("Broadcast interrupted", e);
             }
         }
+
         log.info("✅ Broadcast completed. Success: {}, Failed: {}", successCount, failCount);
     }
 
