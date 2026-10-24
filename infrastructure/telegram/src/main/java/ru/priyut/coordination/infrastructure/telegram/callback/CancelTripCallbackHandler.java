@@ -2,11 +2,11 @@ package ru.priyut.coordination.infrastructure.telegram.callback;
 
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.meta.api.objects.Update;
+import ru.priyut.coordination.application.port.outbound.TelegramGateway;
 import ru.priyut.coordination.application.port.outbound.VolunteerRepository;
 import ru.priyut.coordination.domain.shared.TelegramId;
 import ru.priyut.coordination.domain.volunteer.Volunteer;
 import ru.priyut.coordination.infrastructure.telegram.dialog.TripCancelDialog;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 /**
  * Обработка кнопки "❌ Отменить" в списке поездок волонтёра.
@@ -17,12 +17,12 @@ public class CancelTripCallbackHandler implements CallbackHandler {
 
     private final TripCancelDialog tripCancelDialog;
     private final VolunteerRepository volunteerRepository;
-    private final TelegramBotGatewayImpl telegramGateway;
+    private final TelegramGateway telegramGateway; // ✅ Внедряем интерфейс
 
     public CancelTripCallbackHandler(
             TripCancelDialog tripCancelDialog,
             VolunteerRepository volunteerRepository,
-            TelegramBotGatewayImpl telegramGateway
+            TelegramGateway telegramGateway
     ) {
         this.tripCancelDialog = tripCancelDialog;
         this.volunteerRepository = volunteerRepository;
@@ -40,7 +40,6 @@ public class CancelTripCallbackHandler implements CallbackHandler {
 
         try {
             long tripId = Long.parseLong(CallbackDataCodec.decode(update.getCallbackQuery().getData()).payload());
-
             Volunteer volunteer = volunteerRepository.findByTelegramId(telegramId)
                     .orElseThrow(() -> new RuntimeException("Volunteer not found"));
 

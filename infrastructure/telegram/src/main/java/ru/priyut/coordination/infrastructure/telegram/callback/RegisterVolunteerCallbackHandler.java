@@ -2,9 +2,9 @@ package ru.priyut.coordination.infrastructure.telegram.callback;
 
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.meta.api.objects.Update;
+import ru.priyut.coordination.application.port.outbound.TelegramGateway;
 import ru.priyut.coordination.domain.shared.TelegramId;
 import ru.priyut.coordination.infrastructure.telegram.dialog.VolunteerRegistrationDialog;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 /**
  * Обработка кнопки "Зарегистрироваться" в /start.
@@ -13,11 +13,11 @@ import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway
 public class RegisterVolunteerCallbackHandler implements CallbackHandler {
 
     private final VolunteerRegistrationDialog registrationDialog;
-    private final TelegramBotGatewayImpl telegramGateway;
+    private final TelegramGateway telegramGateway; // ✅ Внедряем интерфейс
 
     public RegisterVolunteerCallbackHandler(
             VolunteerRegistrationDialog registrationDialog,
-            TelegramBotGatewayImpl telegramGateway
+            TelegramGateway telegramGateway
     ) {
         this.registrationDialog = registrationDialog;
         this.telegramGateway = telegramGateway;

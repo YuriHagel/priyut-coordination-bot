@@ -7,10 +7,10 @@ import org.telegram.telegrambots.meta.api.objects.Update;
 import ru.priyut.coordination.application.exception.TripNotFoundException;
 import ru.priyut.coordination.application.exception.VolunteerNotFoundException;
 import ru.priyut.coordination.application.port.in.RespondToTripUseCase;
+import ru.priyut.coordination.application.port.outbound.TelegramGateway;
 import ru.priyut.coordination.application.port.outbound.VolunteerRepository;
 import ru.priyut.coordination.domain.shared.TelegramId;
 import ru.priyut.coordination.domain.volunteer.Volunteer;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 /**
  * Обработка кнопки "🚕 Я поеду".
@@ -22,12 +22,12 @@ public class RespondTripCallbackHandler implements CallbackHandler {
 
     private final RespondToTripUseCase respondToTripUseCase;
     private final VolunteerRepository volunteerRepository;
-    private final TelegramBotGatewayImpl telegramGateway;
+    private final TelegramGateway telegramGateway; // ✅ Внедряем интерфейс
 
     public RespondTripCallbackHandler(
             RespondToTripUseCase respondToTripUseCase,
             VolunteerRepository volunteerRepository,
-            TelegramBotGatewayImpl telegramGateway
+            TelegramGateway telegramGateway
     ) {
         this.respondToTripUseCase = respondToTripUseCase;
         this.volunteerRepository = volunteerRepository;
@@ -52,7 +52,6 @@ public class RespondTripCallbackHandler implements CallbackHandler {
 
             // Вызываем use-case
             respondToTripUseCase.respond(tripId, volunteer.getId());
-
             log.info("Volunteer {} responded to trip {}", telegramId, tripId);
 
             telegramGateway.answerCallbackQuery(callbackQueryId, "✅ Заявка отправлена администратору!", false);

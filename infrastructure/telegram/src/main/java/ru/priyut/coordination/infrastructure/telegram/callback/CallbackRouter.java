@@ -4,8 +4,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.meta.api.objects.Update;
+import ru.priyut.coordination.application.port.outbound.TelegramGateway;
 import ru.priyut.coordination.domain.shared.TelegramId;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 import java.util.List;
 import java.util.Map;
@@ -22,9 +22,9 @@ public class CallbackRouter {
     private static final Logger log = LoggerFactory.getLogger(CallbackRouter.class);
 
     private final Map<String, CallbackHandler> handlersByPrefix;
-    private final TelegramBotGatewayImpl telegramGateway;
+    private final TelegramGateway telegramGateway; // ✅ Внедряем интерфейс
 
-    public CallbackRouter(List<CallbackHandler> handlers, TelegramBotGatewayImpl telegramGateway) {
+    public CallbackRouter(List<CallbackHandler> handlers, TelegramGateway telegramGateway) {
         this.handlersByPrefix = handlers.stream()
                 .collect(Collectors.toUnmodifiableMap(
                         CallbackHandler::callbackPrefix,
