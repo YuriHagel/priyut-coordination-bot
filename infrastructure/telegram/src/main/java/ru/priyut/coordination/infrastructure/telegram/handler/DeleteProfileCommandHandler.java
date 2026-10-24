@@ -9,7 +9,7 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import ru.priyut.coordination.application.port.in.DeleteProfileUseCase;
 import ru.priyut.coordination.domain.shared.TelegramId;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 import java.util.List;
 
@@ -23,11 +23,11 @@ public class DeleteProfileCommandHandler implements CommandHandler {
     private static final Logger log = LoggerFactory.getLogger(DeleteProfileCommandHandler.class);
 
     private final DeleteProfileUseCase deleteProfileUseCase;
-    private final TelegramBotGateway telegramGateway;
+    private final TelegramBotGatewayImpl telegramGateway;
 
     public DeleteProfileCommandHandler(
             DeleteProfileUseCase deleteProfileUseCase,
-            TelegramBotGateway telegramGateway
+            TelegramBotGatewayImpl telegramGateway
     ) {
         this.deleteProfileUseCase = deleteProfileUseCase;
         this.telegramGateway = telegramGateway;

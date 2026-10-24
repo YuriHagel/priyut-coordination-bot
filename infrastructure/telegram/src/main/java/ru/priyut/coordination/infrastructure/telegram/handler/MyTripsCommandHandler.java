@@ -12,8 +12,7 @@ import ru.priyut.coordination.application.port.outbound.VolunteerRepository;
 import ru.priyut.coordination.domain.shared.TelegramId;
 import ru.priyut.coordination.domain.trip.Trip;
 import ru.priyut.coordination.domain.trip.TripStatus;
-import ru.priyut.coordination.domain.volunteer.Volunteer;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -31,12 +30,12 @@ public class MyTripsCommandHandler implements CommandHandler {
 
     private final VolunteerRepository volunteerRepository;
     private final TripRepository tripRepository;
-    private final TelegramBotGateway telegramGateway;
+    private final TelegramBotGatewayImpl telegramGateway;
 
     public MyTripsCommandHandler(
             VolunteerRepository volunteerRepository,
             TripRepository tripRepository,
-            TelegramBotGateway telegramGateway
+            TelegramBotGatewayImpl telegramGateway
     ) {
         this.volunteerRepository = volunteerRepository;
         this.tripRepository = tripRepository;

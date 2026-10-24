@@ -7,7 +7,7 @@ import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import ru.priyut.coordination.application.port.in.CompleteTripUseCase;
 import ru.priyut.coordination.domain.shared.TelegramId;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 /**
  * Обработчик callback "✅ Закрыть поездку" (сценарий Е ТЗ).
@@ -18,11 +18,11 @@ public class CloseTripHandler implements AdminCallbackHandler {
     private static final Logger log = LoggerFactory.getLogger(CloseTripHandler.class);
 
     private final CompleteTripUseCase completeTripUseCase;
-    private final TelegramBotGateway telegramGateway;
+    private final TelegramBotGatewayImpl telegramGateway;
 
     public CloseTripHandler(
             CompleteTripUseCase completeTripUseCase,
-            TelegramBotGateway telegramGateway
+            TelegramBotGatewayImpl telegramGateway
     ) {
         this.completeTripUseCase = completeTripUseCase;
         this.telegramGateway = telegramGateway;

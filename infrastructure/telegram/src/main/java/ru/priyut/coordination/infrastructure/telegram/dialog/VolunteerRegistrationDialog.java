@@ -7,7 +7,7 @@ import ru.priyut.coordination.domain.shared.TelegramId;
 import ru.priyut.coordination.domain.shared.UtcClock;
 import ru.priyut.coordination.domain.volunteer.*;
 import ru.priyut.coordination.infrastructure.telegram.dialog.steps.*;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 import java.util.List;
 
@@ -34,7 +34,7 @@ public class VolunteerRegistrationDialog extends Dialog {
 
     public VolunteerRegistrationDialog(
             ConversationStore conversationStore,
-            TelegramBotGateway telegramGateway,
+            TelegramBotGatewayImpl telegramGateway,
             UtcClock clock,
             RegisterVolunteerUseCase registerVolunteerUseCase
     ) {

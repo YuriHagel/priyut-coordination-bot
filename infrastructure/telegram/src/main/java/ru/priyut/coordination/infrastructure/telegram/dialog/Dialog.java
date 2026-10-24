@@ -6,7 +6,7 @@ import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import ru.priyut.coordination.domain.shared.TelegramId;
 import ru.priyut.coordination.domain.shared.UtcClock;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 import java.util.List;
 
@@ -19,12 +19,12 @@ public abstract class Dialog {
     protected final Logger log = LoggerFactory.getLogger(getClass());
 
     protected final ConversationStore conversationStore;
-    protected final TelegramBotGateway telegramGateway;
+    protected final TelegramBotGatewayImpl telegramGateway;
     protected final UtcClock clock;
 
     protected Dialog(
             ConversationStore conversationStore,
-            TelegramBotGateway telegramGateway,
+            TelegramBotGatewayImpl telegramGateway,
             UtcClock clock
     ) {
         this.conversationStore = conversationStore;

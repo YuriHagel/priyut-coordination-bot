@@ -8,8 +8,7 @@ import ru.priyut.coordination.domain.shared.UtcClock;
 import ru.priyut.coordination.domain.trip.Route;
 import ru.priyut.coordination.domain.trip.TripComment;
 import ru.priyut.coordination.domain.trip.TripType;
-import ru.priyut.coordination.infrastructure.telegram.dialog.steps.*;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 import java.util.List;
 
@@ -31,7 +30,7 @@ public class TripCreationDialog extends Dialog {
 
     public TripCreationDialog(
             ConversationStore conversationStore,
-            TelegramBotGateway telegramGateway,
+            TelegramBotGatewayImpl telegramGateway,
             UtcClock clock,
             CreateTripUseCase createTripUseCase
     ) {

@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import ru.priyut.coordination.domain.shared.TelegramId;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 import java.util.List;
 import java.util.Map;
@@ -22,9 +22,9 @@ public class CommandRouter {
     private static final Logger log = LoggerFactory.getLogger(CommandRouter.class);
 
     private final Map<String, CommandHandler> handlersByCommand;
-    private final TelegramBotGateway telegramGateway;
+    private final TelegramBotGatewayImpl telegramGateway;
 
-    public CommandRouter(List<CommandHandler> handlers, TelegramBotGateway telegramGateway) {
+    public CommandRouter(List<CommandHandler> handlers, TelegramBotGatewayImpl telegramGateway) {
         this.handlersByCommand = handlers.stream()
                 .collect(Collectors.toUnmodifiableMap(
                         h -> h.command().toLowerCase(),

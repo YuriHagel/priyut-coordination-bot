@@ -12,11 +12,9 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import ru.priyut.coordination.application.port.outbound.VolunteerRepository;
 import ru.priyut.coordination.domain.shared.TelegramId;
-import ru.priyut.coordination.domain.volunteer.VolunteerStatus;
 import ru.priyut.coordination.infrastructure.telegram.dialog.VolunteerRegistrationDialog;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
-import java.io.File;
 import java.util.List;
 
 /**
@@ -34,14 +32,14 @@ public class StartCommandHandler implements CommandHandler {
 
     private final VolunteerRepository volunteerRepository;
     private final VolunteerRegistrationDialog registrationDialog;
-    private final TelegramBotGateway telegramGateway;
+    private final TelegramBotGatewayImpl telegramGateway;
     private final String policyVersion;
     private final String policyDocumentPath;
 
     public StartCommandHandler(
             VolunteerRepository volunteerRepository,
             VolunteerRegistrationDialog registrationDialog,
-            TelegramBotGateway telegramGateway,
+            TelegramBotGatewayImpl telegramGateway,
             @Value("${priyut.pdn.policy-version:1.0}") String policyVersion,
             @Value("${priyut.pdn.policy-document-path:Politika_PDN_Priyut.pdf}") String policyDocumentPath
     ) {

@@ -7,7 +7,7 @@ import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import ru.priyut.coordination.application.port.in.ConfirmVolunteerUseCase;
 import ru.priyut.coordination.domain.shared.TelegramId;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 /**
  * Обработчик callback "❌ Отклонить волонтёра" (сценарий В ТЗ).
@@ -18,11 +18,11 @@ public class RejectVolunteerHandler implements AdminCallbackHandler {
     private static final Logger log = LoggerFactory.getLogger(RejectVolunteerHandler.class);
 
     private final ConfirmVolunteerUseCase confirmVolunteerUseCase;
-    private final TelegramBotGateway telegramGateway;
+    private final TelegramBotGatewayImpl telegramGateway;
 
     public RejectVolunteerHandler(
             ConfirmVolunteerUseCase confirmVolunteerUseCase,
-            TelegramBotGateway telegramGateway
+            TelegramBotGatewayImpl telegramGateway
     ) {
         this.confirmVolunteerUseCase = confirmVolunteerUseCase;
         this.telegramGateway = telegramGateway;

@@ -9,9 +9,7 @@ import org.springframework.context.annotation.Configuration;
 import org.telegram.telegrambots.client.okhttp.OkHttpTelegramClient;
 import org.telegram.telegrambots.longpolling.TelegramBotsLongPollingApplication;
 import org.telegram.telegrambots.longpolling.util.LongPollingSingleThreadUpdateConsumer;
-import ru.priyut.coordination.domain.shared.TelegramId;
 import ru.priyut.coordination.infrastructure.telegram.bot.UpdateDispatcher;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
 import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 import java.util.Set;
@@ -103,7 +101,7 @@ public class TelegramBotConfig {
      * Реализует порт из application-слоя.
      */
     @Bean
-    public TelegramBotGateway telegramBotGateway(
+    public TelegramBotGatewayImpl telegramBotGateway(
             OkHttpTelegramClient telegramClient,
             ru.priyut.coordination.infrastructure.telegram.notification.RateLimitedMessageSender rateLimitedSender
     ) {

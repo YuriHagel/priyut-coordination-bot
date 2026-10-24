@@ -19,13 +19,13 @@ import java.util.List;
  * Делегирует вызовы обёртке PriyutTelegramBot, которая логирует ошибки и упрощает тестирование.
  */
 @Component
-public class TelegramBotGateway implements TelegramGateway {
+public class TelegramBotGatewayImpl implements TelegramGateway {
 
-    private static final Logger log = LoggerFactory.getLogger(TelegramBotGateway.class);
+    private static final Logger log = LoggerFactory.getLogger(TelegramBotGatewayImpl.class);
 
     private final PriyutTelegramBot telegramBot;
 
-    public TelegramBotGateway(PriyutTelegramBot telegramBot) {
+    public TelegramBotGatewayImpl(PriyutTelegramBot telegramBot) {
         this.telegramBot = telegramBot;
     }
 

@@ -7,7 +7,7 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import ru.priyut.coordination.application.port.outbound.VolunteerRepository;
 import ru.priyut.coordination.domain.shared.TelegramId;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 import java.util.List;
 
@@ -19,11 +19,11 @@ import java.util.List;
 public class ProfileCommandHandler implements CommandHandler {
 
     private final VolunteerRepository volunteerRepository;
-    private final TelegramBotGateway telegramGateway;
+    private final TelegramBotGatewayImpl telegramGateway;
 
     public ProfileCommandHandler(
             VolunteerRepository volunteerRepository,
-            TelegramBotGateway telegramGateway
+            TelegramBotGatewayImpl telegramGateway
     ) {
         this.volunteerRepository = volunteerRepository;
         this.telegramGateway = telegramGateway;

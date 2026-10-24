@@ -8,7 +8,7 @@ import org.telegram.telegrambots.meta.api.objects.Update;
 import ru.priyut.coordination.application.port.outbound.TripRepository;
 import ru.priyut.coordination.domain.shared.TelegramId;
 import ru.priyut.coordination.domain.trip.Trip;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 import java.io.StringWriter;
 import java.time.format.DateTimeFormatter;
@@ -25,11 +25,11 @@ public class ExportTripsHandler implements AdminCommandHandler {
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     private final TripRepository tripRepository;
-    private final TelegramBotGateway telegramGateway;
+    private final TelegramBotGatewayImpl telegramGateway;
 
     public ExportTripsHandler(
             TripRepository tripRepository,
-            TelegramBotGateway telegramGateway
+            TelegramBotGatewayImpl telegramGateway
     ) {
         this.tripRepository = tripRepository;
         this.telegramGateway = telegramGateway;

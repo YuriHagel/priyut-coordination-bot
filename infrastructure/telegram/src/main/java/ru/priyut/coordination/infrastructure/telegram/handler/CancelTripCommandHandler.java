@@ -9,7 +9,7 @@ import ru.priyut.coordination.application.exception.TripNotFoundException;
 import ru.priyut.coordination.application.port.in.CancelTripUseCase;
 import ru.priyut.coordination.domain.shared.TelegramId;
 import ru.priyut.coordination.infrastructure.telegram.admin.AdminCommandHandler;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 /**
  * Обработчик команды /cancel_trip [ID] (сценарий 4.4 ТЗ).
@@ -23,11 +23,11 @@ public class CancelTripCommandHandler implements AdminCommandHandler {
     private static final Logger log = LoggerFactory.getLogger(CancelTripCommandHandler.class);
 
     private final CancelTripUseCase cancelTripUseCase;
-    private final TelegramBotGateway telegramGateway;
+    private final TelegramBotGatewayImpl telegramGateway;
 
     public CancelTripCommandHandler(
             CancelTripUseCase cancelTripUseCase,
-            TelegramBotGateway telegramGateway
+            TelegramBotGatewayImpl telegramGateway
     ) {
         this.cancelTripUseCase = cancelTripUseCase;
         this.telegramGateway = telegramGateway;

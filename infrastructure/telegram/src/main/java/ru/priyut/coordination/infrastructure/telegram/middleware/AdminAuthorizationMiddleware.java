@@ -6,7 +6,7 @@ import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.meta.api.objects.Update;
 import ru.priyut.coordination.domain.shared.TelegramId;
 import ru.priyut.coordination.infrastructure.telegram.config.TelegramBotProperties;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 /**
  * Middleware для проверки прав администратора.
@@ -24,11 +24,11 @@ public class AdminAuthorizationMiddleware implements Middleware {
     private static final Logger log = LoggerFactory.getLogger(AdminAuthorizationMiddleware.class);
 
     private final TelegramBotProperties properties;
-    private final TelegramBotGateway telegramGateway;
+    private final TelegramBotGatewayImpl telegramGateway;
 
     public AdminAuthorizationMiddleware(
             TelegramBotProperties properties,
-            TelegramBotGateway telegramGateway
+            TelegramBotGatewayImpl telegramGateway
     ) {
         this.properties = properties;
         this.telegramGateway = telegramGateway;

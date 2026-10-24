@@ -9,7 +9,7 @@ import org.telegram.telegrambots.meta.api.objects.Update;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import ru.priyut.coordination.domain.shared.TelegramId;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 import java.util.List;
 
@@ -22,11 +22,11 @@ public class WithdrawConsentCommandHandler implements CommandHandler {
 
     private static final Logger log = LoggerFactory.getLogger(WithdrawConsentCommandHandler.class);
 
-    private final TelegramBotGateway telegramGateway;
+    private final TelegramBotGatewayImpl telegramGateway;
     private final String policyVersion;
 
     public WithdrawConsentCommandHandler(
-            TelegramBotGateway telegramGateway,
+            TelegramBotGatewayImpl telegramGateway,
             @Value("${priyut.pdn.policy-version:1.0}") String policyVersion
     ) {
         this.telegramGateway = telegramGateway;

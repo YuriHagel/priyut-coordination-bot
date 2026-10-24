@@ -6,8 +6,7 @@ import ru.priyut.coordination.application.port.in.CancelTripUseCase;
 import ru.priyut.coordination.domain.shared.TelegramId;
 import ru.priyut.coordination.domain.shared.UtcClock;
 import ru.priyut.coordination.domain.volunteer.VolunteerId;
-import ru.priyut.coordination.infrastructure.telegram.dialog.steps.*;
-import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGateway;
+import ru.priyut.coordination.infrastructure.telegram.gateway.TelegramBotGatewayImpl;
 
 import java.util.List;
 
@@ -25,7 +24,7 @@ public class TripCancelDialog extends Dialog {
 
     public TripCancelDialog(
             ConversationStore conversationStore,
-            TelegramBotGateway telegramGateway,
+            TelegramBotGatewayImpl telegramGateway,
             UtcClock clock,
             CancelTripUseCase cancelTripUseCase
     ) {
