@@ -1,7 +1,6 @@
 package ru.priyut.coordination.domain.trip;
 
 import ru.priyut.coordination.domain.shared.DomainException;
-import ru.priyut.coordination.domain.shared.UtcClock;
 import ru.priyut.coordination.domain.volunteer.VolunteerId;
 
 import java.time.Instant;
@@ -17,7 +16,7 @@ public final class Trip {
     private final TripId id;
     private final Long createdByAdminTelegramId;
     private final Route route;
-    private final LocalDateTime tripDateTime; // в Europe/Moscow
+    private LocalDateTime tripDateTime; // в Europe/Moscow
     private final String taskDescription;
     private final TripType type;
     private TripComment comment;
@@ -304,23 +303,73 @@ public final class Trip {
 
     // === Геттеры ===
 
-    public TripId getId() { return id; }
-    public Long getCreatedByAdminTelegramId() { return createdByAdminTelegramId; }
-    public Route getRoute() { return route; }
-    public LocalDateTime getTripDateTime() { return tripDateTime; }
-    public String getTaskDescription() { return taskDescription; }
-    public TripType getType() { return type; }
-    public TripComment getComment() { return comment; }
-    public TripStatus getStatus() { return status; }
-    public TripAssignment getAssignment() { return assignment; }
-    public Instant getCreatedAt() { return createdAt; }
-    public Instant getPublishedAt() { return publishedAt; }
-    public Instant getCancelledAt() { return cancelledAt; }
-    public String getCancelReason() { return cancelReason; }
-    public Instant getCompletedAt() { return completedAt; }
-    public Long getClosedByAdminTelegramId() { return closedByAdminTelegramId; }
-    public Instant getUpdatedAt() { return updatedAt; }
-    public long getVersion() { return version; }
+    public TripId getId() {
+        return id;
+    }
+
+    public Long getCreatedByAdminTelegramId() {
+        return createdByAdminTelegramId;
+    }
+
+    public Route getRoute() {
+        return route;
+    }
+
+    public LocalDateTime getTripDateTime() {
+        return tripDateTime;
+    }
+
+    public String getTaskDescription() {
+        return taskDescription;
+    }
+
+    public TripType getType() {
+        return type;
+    }
+
+    public TripComment getComment() {
+        return comment;
+    }
+
+    public TripStatus getStatus() {
+        return status;
+    }
+
+    public TripAssignment getAssignment() {
+        return assignment;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public Instant getPublishedAt() {
+        return publishedAt;
+    }
+
+    public Instant getCancelledAt() {
+        return cancelledAt;
+    }
+
+    public String getCancelReason() {
+        return cancelReason;
+    }
+
+    public Instant getCompletedAt() {
+        return completedAt;
+    }
+
+    public Long getClosedByAdminTelegramId() {
+        return closedByAdminTelegramId;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
+
+    public long getVersion() {
+        return version;
+    }
 
     /**
      * ID назначенного волонтёра (если есть).
