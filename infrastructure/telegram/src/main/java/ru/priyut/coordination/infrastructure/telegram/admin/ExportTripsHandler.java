@@ -53,9 +53,10 @@ public class ExportTripsHandler implements AdminCommandHandler {
         var trips = tripRepository.findByStatus(ru.priyut.coordination.domain.trip.TripStatus.COMPLETED);
 
         if (trips.isEmpty()) {
-            var msg = new SendMessage();
-            msg.setChatId(telegramId.value());
-            msg.setText("ℹ️ Нет завершённых поездок для экспорта.");
+            var msg = SendMessage.builder()
+                    .chatId(String.valueOf(telegramId.value()))
+                    .text("ℹ️ Нет завершённых поездок для экспорта.")
+                    .build();
             telegramGateway.execute(msg);
             return;
         }
@@ -64,11 +65,11 @@ public class ExportTripsHandler implements AdminCommandHandler {
         var csv = generateCsv(trips);
 
         // Отправляем как сообщение (для MVP; в production — как документ)
-        var msg = new SendMessage();
-        msg.setChatId(telegramId.value());
-        msg.setText("📊 Экспорт поездок (" + trips.size() + " записей):\n\n" +
-                "```\n" + csv + "\n```");
-        msg.setParseMode("Markdown");
+        var msg = SendMessage.builder()
+                .chatId(String.valueOf(telegramId.value()))
+                .text("📊 Экспорт поездок (" + trips.size() + " записей):\n\n" +
+                        "```\n" + csv + "\n```")
+                .parseMode("Markdown");
         telegramGateway.execute(msg);
     }
 

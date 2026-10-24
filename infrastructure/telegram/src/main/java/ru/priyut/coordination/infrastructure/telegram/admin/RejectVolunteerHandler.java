@@ -43,9 +43,10 @@ public class RejectVolunteerHandler implements AdminCallbackHandler {
             confirmVolunteerUseCase.reject(tripId, telegramId.value());
             log.info("Admin {} rejected volunteer for trip {}", telegramId, tripId);
 
-            var msg = new SendMessage();
-            msg.setChatId(telegramId.value());
-            msg.setText("❌ Волонтёр отклонён. Поездка #" + tripId + " снова доступна для откликов.");
+            var msg = SendMessage.builder()
+                    .chatId(String.valueOf(telegramId.value()))
+                    .text("❌ Волонтёр отклонён. Поездка #" + tripId + " снова доступна для откликов.")
+                    .build();
             telegramGateway.execute(msg);
         } catch (Exception e) {
             log.error("Failed to reject volunteer for trip {} by admin {}", tripIdStr, telegramId, e);

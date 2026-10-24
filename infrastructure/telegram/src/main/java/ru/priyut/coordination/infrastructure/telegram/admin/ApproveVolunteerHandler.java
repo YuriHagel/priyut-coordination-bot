@@ -44,9 +44,10 @@ public class ApproveVolunteerHandler implements AdminCallbackHandler {
             log.info("Admin {} approved volunteer for trip {}", telegramId, tripId);
 
             // Уведомляем админа
-            var msg = new SendMessage();
-            msg.setChatId(telegramId.value());
-            msg.setText("✅ Волонтёр подтверждён на поездку #" + tripId);
+            var msg = SendMessage.builder()
+                    .chatId(String.valueOf(telegramId.value()))
+                    .text("✅ Волонтёр подтверждён на поездку #" + tripId)
+                    .build();
             telegramGateway.execute(msg);
         } catch (Exception e) {
             log.error("Failed to approve volunteer for trip {} by admin {}", tripIdStr, telegramId, e);

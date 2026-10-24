@@ -43,9 +43,10 @@ public class CloseTripHandler implements AdminCallbackHandler {
             completeTripUseCase.closeByAdmin(tripId, telegramId.value());
             log.info("Admin {} closed trip {}", telegramId, tripId);
 
-            var msg = new SendMessage();
-            msg.setChatId(telegramId.value());
-            msg.setText("✅ Поездка #" + tripId + " закрыта.\nДанные сохранены в историю.");
+            var msg = SendMessage.builder()
+                    .chatId(String.valueOf(telegramId.value()))
+                    .text("✅ Поездка #" + tripId + " закрыта.\nДанные сохранены в историю.")
+                    .build();
             telegramGateway.execute(msg);
         } catch (Exception e) {
             log.error("Failed to close trip {} by admin {}", tripIdStr, telegramId, e);
