@@ -10,6 +10,7 @@ dependencies {
     // Telegram Bot API (Long Polling)
     implementation(libs.telegram.bots.longpolling)
     implementation(libs.telegram.bots.client)
+    implementation(libs.telegram.bots.meta)
 
     implementation(libs.resilience4j.spring.boot4)
     implementation(libs.resilience4j.micrometer)

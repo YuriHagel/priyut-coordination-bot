@@ -35,6 +35,7 @@ postgresql = { module = "org.postgresql:postgresql" }
 # Telegram
 telegram-bots-longpolling = { module = "org.telegram:telegrambots-longpolling", version.ref = "telegram-bots" }
 telegram-bots-client = { module = "org.telegram:telegrambots-client", version.ref = "telegram-bots" }
+telegram-bots-meta = { module = "org.telegram:telegrambots-meta", version.ref = "telegram-bots" }
 
 # Testcontainers
 testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version.ref = "testcontainers" }

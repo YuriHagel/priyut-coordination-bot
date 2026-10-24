@@ -3,26 +3,26 @@ package ru.priyut.coordination.infrastructure.telegram.gateway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.telegram.telegrambots.meta.api.methods.AnswerCallbackQuery;
 import org.telegram.telegrambots.meta.api.methods.send.SendDocument;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.InputFile;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboard;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardRow;
+import ru.priyut.coordination.application.port.outbound.InlineButton;
 import ru.priyut.coordination.application.port.outbound.TelegramGateway;
 import ru.priyut.coordination.domain.shared.TelegramId;
 import ru.priyut.coordination.infrastructure.telegram.bot.PriyutTelegramBot;
 
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Реализация порта TelegramGateway.
- * Делегирует вызовы обёртке PriyutTelegramBot, которая логирует ошибки и упрощает тестирование.
- */
 @Component
 public class TelegramBotGatewayImpl implements TelegramGateway {
 
     private static final Logger log = LoggerFactory.getLogger(TelegramBotGatewayImpl.class);
-
     private final PriyutTelegramBot telegramBot;
 
     public TelegramBotGatewayImpl(PriyutTelegramBot telegramBot) {
@@ -35,21 +35,17 @@ public class TelegramBotGatewayImpl implements TelegramGateway {
     }
 
     @Override
-    public void sendMessage(TelegramId telegramId, String text, ReplyKeyboard replyMarkup) {
+    public void sendMessage(TelegramId telegramId, String text, List<List<InlineButton>> keyboard) {
         try {
-            // Используем Builder, как показано в декомпилированном коде SendMessage.
-            // Это безопасно и позволяет легко добавлять опциональные поля.
-            SendMessage message = SendMessage.builder()
-                    .chatId(telegramId.value().toString()) // Telegram API требует String или Long
-                    .text(text)
-                    .replyMarkup(replyMarkup)
-                    .build();
+            SendMessage.SendMessageBuilder<?, ?> builder = SendMessage.builder()
+                    .chatId(String.valueOf(telegramId.value())) // ✅ Правильное преобразование long -> String
+                    .text(text);
 
-            // Опционально: можно включить Markdown для форматирования текста
-            // message.enableMarkdownV2(true);
+            if (keyboard != null && !keyboard.isEmpty()) { // ✅ Исправлена опечатка isEmptyа()
+                builder.replyMarkup(buildInlineKeyboard(keyboard));
+            }
 
-            telegramBot.execute(message);
-
+            telegramBot.execute(builder.build());
         } catch (Exception e) {
             log.error("❌ Failed to send message to user {}: {}", telegramId, e.getMessage());
             throw new RuntimeException("Failed to send Telegram message", e);
@@ -63,13 +59,13 @@ public class TelegramBotGatewayImpl implements TelegramGateway {
             InputFile inputFile = new InputFile(documentStream, fileName);
 
             SendDocument document = SendDocument.builder()
-                    .chatId(telegramId.value().toString())
+                    .chatId(String.valueOf(telegramId.value())) // ✅ Правильное преобразование
                     .document(inputFile)
                     .caption(caption)
                     .build();
 
             telegramBot.execute(document);
-
+            log.debug("✅ Successfully sent document '{}' to user {}", fileName, telegramId);
         } catch (Exception e) {
             log.error("❌ Failed to send document '{}' to user {}: {}", fileName, telegramId, e.getMessage());
             throw new RuntimeException("Failed to send Telegram document", e);
@@ -88,7 +84,7 @@ public class TelegramBotGatewayImpl implements TelegramGateway {
                 successCount++;
 
                 // Небольшая пауза для снижения нагрузки на API.
-                // В production лучше использовать Resilience4j RateLimiter, как мы обсуждали ранее.
+                // В production для больших объемов лучше использовать BatchMessageDispatcher с Resilience4j RateLimiter.
                 Thread.sleep(50);
             } catch (Exception e) {
                 failCount++;
@@ -100,7 +96,41 @@ public class TelegramBotGatewayImpl implements TelegramGateway {
                 throw new RuntimeException("Broadcast interrupted", e);
             }
         }
-
         log.info("✅ Broadcast completed. Success: {}, Failed: {}", successCount, failCount);
+    }
+
+    @Override
+    public void answerCallbackQuery(String callbackQueryId, String text, boolean showAlert) {
+        try {
+            AnswerCallbackQuery answer = AnswerCallbackQuery.builder()
+                    .callbackQueryId(callbackQueryId)
+                    .text(text)
+                    .showAlert(showAlert)
+                    .build();
+
+            telegramBot.execute(answer);
+        } catch (Exception e) {
+            // Логируем ошибку, но не выбрасываем исключение, чтобы не ломать
+            // основной поток обработки команды, если ответ на кнопку не прошел.
+            log.error("❌ Failed to answer callback query {}: {}", callbackQueryId, e.getMessage());
+        }
+    }
+
+    /**
+     * Маппинг нашего простого DTO в объекты библиотеки Telegram Bots
+     */
+    private InlineKeyboardMarkup buildInlineKeyboard(List<List<InlineButton>> keyboardDto) {
+        List<InlineKeyboardRow> rows = new ArrayList<>();
+        for (List<InlineButton> rowDto : keyboardDto) {
+            List<InlineKeyboardButton> buttons = new ArrayList<>();
+            for (InlineButton btnDto : rowDto) {
+                buttons.add(InlineKeyboardButton.builder()
+                        .text(btnDto.text())
+                        .callbackData(btnDto.callbackData())
+                        .build());
+            }
+            rows.add(new InlineKeyboardRow(buttons));
+        }
+        return InlineKeyboardMarkup.builder().keyboard(rows).build();
     }
 }
