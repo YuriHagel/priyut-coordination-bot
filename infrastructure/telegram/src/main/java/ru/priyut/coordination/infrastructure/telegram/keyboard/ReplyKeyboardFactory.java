@@ -1,14 +1,15 @@
 package ru.priyut.coordination.infrastructure.telegram.keyboard;
 
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 
-import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Фабрика для ReplyKeyboard (кнопки под полем ввода текста).
- * Используется реже, чем Inline, но полезна для главного меню.
+ * Фабрика для ReplyKeyboard (клавиатура под полем ввода текста).
+ * Использует строгую типизацию (KeyboardRow + KeyboardButton) и Builder API
+ * в полном соответствии с требованиями библиотеки Telegram Bots.
  */
 public final class ReplyKeyboardFactory {
 
@@ -18,26 +19,39 @@ public final class ReplyKeyboardFactory {
      * Главное меню для зарегистрированного волонтёра.
      */
     public static ReplyKeyboardMarkup createVolunteerMainMenu() {
-        ReplyKeyboardMarkup keyboard = new ReplyKeyboardMarkup();
-        keyboard.setResizeKeyboard(true); // Сжать клавиатуру по высоте
-        keyboard.setSelective(true);      // Показывать только этому пользователю
-
-        List<KeyboardRow> keyboardRows = new ArrayList<>();
-
+        // 1. Создаем ряды и наполняем их кнопками
         KeyboardRow row1 = new KeyboardRow();
-        row1.add("📋 Мои поездки");
-        row1.add("👤 Мой профиль");
-        keyboardRows.add(row1);
+        row1.add(new KeyboardButton("📋 Мои поездки"));
+        row1.add(new KeyboardButton("👤 Мой профиль"));
 
         KeyboardRow row2 = new KeyboardRow();
-        row2.add("⚙️ Настройки доступности");
-        keyboardRows.add(row2);
+        row2.add(new KeyboardButton("⚙️ Настройки доступности"));
 
         KeyboardRow row3 = new KeyboardRow();
-        row3.add("🛑 Удалить анкету");
-        keyboardRows.add(row3);
+        row3.add(new KeyboardButton("🛑 Удалить анкету"));
 
-        keyboard.setKeyboard(keyboardRows);
-        return keyboard;
+        // 2. Собираем финальный объект через Builder, как показывает декомпилированный код
+        return ReplyKeyboardMarkup.builder()
+                .keyboard(List.of(row1, row2, row3)) // Передаем строго List<KeyboardRow>
+                .resizeKeyboard(true)                // Сжать клавиатуру по высоте (подогнать под размер экрана)
+                .oneTimeKeyboard(false)              // Не скрывать клавиатуру после первого нажатия
+                .selective(true)                     // Показывать только тому, кому отправлено сообщение
+                .isPersistent(true)                  // Клавиатура остается прикрепленной к чату постоянно
+                .build();
+    }
+
+    /**
+     * Простая клавиатура Да/Нет (универсальная).
+     */
+    public static ReplyKeyboardMarkup createYesNoKeyboard(String yesText, String noText) {
+        KeyboardRow row = new KeyboardRow();
+        row.add(new KeyboardButton(yesText));
+        row.add(new KeyboardButton(noText));
+
+        return ReplyKeyboardMarkup.builder()
+                .keyboard(List.of(row))
+                .resizeKeyboard(true)
+                .oneTimeKeyboard(true) // Скрыть после нажатия (для одноразовых подтверждений)
+                .build();
     }
 }
