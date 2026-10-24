@@ -30,6 +30,13 @@ public final class Trip {
     private Long closedByAdminTelegramId;
     private Instant updatedAt;
     private long version; // для оптимистичной блокировки
+    private boolean reminder24hSent;
+    private boolean reminder2hSent;
+    private Instant reminder24hSentAt;
+    private Instant reminder2hSentAt;
+
+
+
 
     private Trip(
             TripId id,
@@ -380,6 +387,22 @@ public final class Trip {
 
     public boolean isUrgent() {
         return type.isUrgent();
+    }
+
+
+    public boolean isReminder24hSent() { return reminder24hSent; }
+    public boolean isReminder2hSent() { return reminder2hSent; }
+
+    public void markReminder24hSent(Instant now) {
+        this.reminder24hSent = true;
+        this.reminder24hSentAt = now;
+        this.updatedAt = now;
+    }
+
+    public void markReminder2hSent(Instant now) {
+        this.reminder2hSent = true;
+        this.reminder2hSentAt = now;
+        this.updatedAt = now;
     }
 
     // === Вспомогательные методы ===

@@ -20,6 +20,8 @@ spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-star
 spring-context = { module = "org.springframework:spring-context" }
 spring-tx = { module = "org.springframework:spring-tx" }
 
+slf4j-api = { module = "org.slf4j:slf4j-api" }
+
 # Metrics
 micrometer-registry-prometheus = { module = "io.micrometer:micrometer-registry-prometheus" }
 

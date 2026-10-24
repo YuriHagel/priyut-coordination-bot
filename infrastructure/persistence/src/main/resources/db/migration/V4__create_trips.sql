@@ -21,7 +21,11 @@ CREATE TABLE trips
     closed_by_admin_telegram_id   BIGINT,
     created_at                    TIMESTAMP WITH TIME ZONE NOT NULL,
     updated_at                    TIMESTAMP WITH TIME ZONE NOT NULL,
-    version                       BIGINT                   NOT NULL DEFAULT 0
+    version                       BIGINT                   NOT NULL DEFAULT 0,
+    reminder_24h_sent             BOOLEAN NOT NULL DEFAULT FALSE,
+    reminder_2h_sent              BOOLEAN NOT NULL DEFAULT FALSE,
+    reminder_24h_sent_at          TIMESTAMP WITH TIME ZONE,
+    reminder_2h_sent_at           TIMESTAMP WITH TIME ZONE
 );
 
 CREATE INDEX idx_trips_uuid ON trips (uuid);
