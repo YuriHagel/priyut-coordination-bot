@@ -1,0 +1,533 @@
+/**
+ * Ядро бота «Приют» — приём webhook, роутинг, отправка сообщений.
+ * Версия: 1.0
+ * Дата: 31.10.2026
+ */
+
+// ═══════════════════════════════════════════════════════════════
+// КОНФИГУРАЦИЯ
+// ═══════════════════════════════════════════════════════════════
+
+const SCRIPT_PROPS = PropertiesService.getScriptProperties();
+const BOT_TOKEN = SCRIPT_PROPS.getProperty('BOT_TOKEN');
+const WEBHOOK_SECRET = SCRIPT_PROPS.getProperty('WEBHOOK_SECRET');
+
+if (!BOT_TOKEN) {
+  throw new Error('BOT_TOKEN не задан в Script Properties!');
+}
+
+const TELEGRAM_API = 'https://api.telegram.org/bot' + BOT_TOKEN;
+
+// ID листов таблицы (загружаем один раз при старте скрипта)
+const SHEET_NAMES = {
+  VOLUNTEERS: 'Волонтёры',
+  TRIPS: 'Поездки',
+  RESPONSES: 'Отклики',
+  LOG: 'Журнал',
+  SETTINGS: 'Настройки',
+  QUEUE: 'Очередь'
+};
+
+// ═══════════════════════════════════════════════════════════════
+// WEBHOOK ENDPOINT (doPost)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Главная точка входа — принимает POST-запросы от Telegram.
+ * URL: https://script.google.com/macros/s/XXXXX/exec?secret=priyutino_2026_secret_xyz123
+ */
+function doPost(e) {
+  try {
+
+    const secret = e.parameter.secret;
+    console.log('🔐 Проверка секрета:');
+    console.log('  Получено из URL:', JSON.stringify(secret));
+    console.log('  Ожидаемое (WEBHOOK_SECRET):', JSON.stringify(WEBHOOK_SECRET));
+    console.log('  Совпадает:', secret === WEBHOOK_SECRET);
+    // 1. Проверка секрета
+    if (secret !== WEBHOOK_SECRET) {
+      logEvent_('security', 'WEBHOOK_SECRET_MISMATCH', { 
+        received: secret,
+        received_length: secret ? secret.length : 0,
+        expected_length: WEBHOOK_SECRET ? WEBHOOK_SECRET.length : 0
+      });
+      return ContentService.createTextOutput('Unauthorized').setMimeType(ContentService.MimeType.TEXT);
+    }
+
+    // 2. Парсинг JSON
+    const contents = JSON.parse(e.postData.contents);
+    
+    // 3. Идемпотентность — проверка update_id
+    const updateId = contents.update_id;
+    if (isDuplicateUpdate_(updateId)) {
+      logEvent_('webhook', 'DUPLICATE_UPDATE_IGNORED', { update_id: updateId });
+      return ContentService.createTextOutput('OK').setMimeType(ContentService.MimeType.TEXT);
+    }
+    markUpdateProcessed_(updateId);
+
+    // 4. Маршрутизация
+    if (contents.message) {
+      handleMessage_(contents.message);
+    } else if (contents.callback_query) {
+      handleCallback_(contents.callback_query);
+    } else {
+      logEvent_('webhook', 'UNKNOWN_UPDATE_TYPE', { contents: contents });
+    }
+
+    return ContentService.createTextOutput('OK').setMimeType(ContentService.MimeType.TEXT);
+
+  } catch (error) {
+    logEvent_('error', 'DO_POST_EXCEPTION', { error: error.toString(), stack: error.stack });
+    return ContentService.createTextOutput('Error').setMimeType(ContentService.MimeType.TEXT);
+  }
+}
+
+function handleMessage_(message) {
+  const chatId = message.chat.id;
+  const userId = message.from.id;
+  const text = (message.text || '').trim();
+
+  logEvent_('message', 'MESSAGE_RECEIVED', { chat_id: chatId, user_id: userId, text: text });
+
+  // Wizard регистрации
+  const regSession = getRegSession_(userId);
+  if (regSession && text !== '' && text.charAt(0) !== '/') {
+    processRegText_(userId, chatId, text, regSession);
+    return;
+  }
+
+  // Wizard создания поездки
+  const tripSession = getTripSession_(userId);
+  if (tripSession && text !== '' && text.charAt(0) !== '/') {
+    processTripText_(userId, chatId, text, tripSession);
+    return;
+  }
+
+  if (text.charAt(0) === '/') {
+    const command = text.split(' ')[0].split('@')[0];
+    handleCommand_(command, message);
+  } else {
+    sendMessage_(chatId, 'Я понимаю только команды и кнопки.\nНапишите /help для списка команд.');
+  }
+}
+
+function handleCallback_(callback) {
+  const chatId = callback.message.chat.id;
+  const userId = callback.from.id;
+  const data = callback.data || '';
+
+  logEvent_('callback', 'CALLBACK_RECEIVED', { chat_id: chatId, user_id: userId, data: data });
+  answerCallback_(callback.id);
+
+  // Ответы на кнопки в ПОСТАХ КАНАЛА приходят с chat.id канала,
+  // поэтому отвечаем всегда в личный чат пользователя (userId).
+  if (data.indexOf('reg:') === 0) {
+    handleRegCallback_(userId, userId, data, callback.message.message_id);
+  } else if (data.indexOf('adm:') === 0) {
+    handleAdminCallback_(userId, userId, data);
+  } else if (data.indexOf('tw:') === 0) {
+    handleTripWizardCallback_(userId, userId, data);
+  } else if (data.indexOf('resp:') === 0 || data.indexOf('skip:') === 0) {
+    handleTripResponse_(userId, userId, data);
+  } else if (data.indexOf('tappr:') === 0 || data.indexOf('trej:') === 0) {
+    handleTripModeration_(userId, userId, data);
+  } else {
+    sendMessage_(userId, 'Неизвестная кнопка: ' + data);
+  }
+}
+
+function handleCommand_(command, message) {
+  const chatId = message.chat.id;
+  const userId = message.from.id;
+
+  switch (command) {
+    case '/start': cmdStart_(chatId, userId); break;
+    case '/help': cmdHelp_(chatId); break;
+    case '/register': startRegistration_(userId, chatId); break;
+    case '/new_trip': cmdNewTrip_(chatId, userId); break;
+    case '/trips': cmdTrips_(chatId, userId); break;
+    case '/open_trips': cmdOpenTrips_(chatId, userId); break;
+    default:
+      sendMessage_(chatId, '❓ Неизвестная команда: ' + command + '\n\nНапишите /help для списка команд.');
+  }
+}
+
+function cmdStart_(chatId, userId) {
+  const volunteer = findVolunteerByTgId_(userId);
+  const rulesVer = getSetting_('rules_version') || '1.0';
+  const rulesDate = getSetting_('rules_date') || '31.10.2026';
+
+  let text = '👋 Здравствуйте! Я бот-координатор автоволонтёров приюта «Приютино».\n\n' +
+    '⚠️ Важно: я НЕ собираю персональные данные. Не указывайте ФИО и телефон — только ник.\n' +
+    '📄 Правила бота: версия ' + rulesVer + ' от ' + rulesDate + '.\n\n';
+
+  if (isUserAdmin_(userId)) {
+    text += '🔑 Вы администратор. Команды: /new_trip, /trips, /volunteers, /stats\n\n';
+  }
+
+  if (volunteer && volunteer.status === 'Одобрен') {
+    text += '✅ Вы уже зарегистрированы как волонтёр!\nКоманды: /open_trips, /my_trips, /profile, /availability';
+    sendMessage_(chatId, text);
+    return;
+  }
+  if (volunteer && volunteer.status === 'На модерации') {
+    text += '⏳ Ваша анкета на модерации (проверка до 24 часов).';
+    sendMessage_(chatId, text);
+    return;
+  }
+
+  text += 'Хотите стать автоволонтёром?';
+  sendMessageWithButtons_(chatId, text, [[
+    { text: '📝 Зарегистрироваться', callback_data: 'reg:start' },
+    { text: '❓ Как это работает', callback_data: 'reg:how' }
+  ]]);
+}
+
+/**
+ * /help — справка по командам
+ */
+function cmdHelp_(chatId) {
+  const text = `
+📖 Справка по командам
+
+👤 Для волонтёров:
+  /start — начать работу
+  /register — зарегистрироваться
+  /my_trips — мои активные поездки
+  /profile — просмотр/правка профиля
+  /help — эта справка
+
+🔑 Для администраторов:
+  /new_trip — создать новую поездку
+  /trips — список активных поездок
+  /volunteers — список волонтёров
+  /stats — статистика
+
+🔧 В разработке:
+  /export_trips — экспорт поездок в CSV
+  /delete_profile — удалить анкету
+  `;
+  
+  sendMessage_(chatId, text);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TELEGRAM API — ОТПРАВКА СООБЩЕНИЙ
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Отправить текстовое сообщение
+ */
+function sendMessage_(chatId, text, parseMode = 'HTML') {
+  const payload = {
+    chat_id: chatId,
+    text: text,
+    parse_mode: parseMode
+  };
+  
+  return callTelegramAPI_('sendMessage', payload);
+}
+
+/**
+ * Отправить сообщение с inline-кнопками
+ */
+function sendMessageWithButtons_(chatId, text, buttons, parseMode = 'HTML') {
+  const payload = {
+    chat_id: chatId,
+    text: text,
+    parse_mode: parseMode,
+    reply_markup: JSON.stringify({
+      inline_keyboard: buttons
+    })
+  };
+  
+  return callTelegramAPI_('sendMessage', payload);
+}
+
+/**
+ * Ответить на callback_query (убрать "часики" на кнопке)
+ */
+function answerCallback_(callbackId, text = '', showAlert = false) {
+  const payload = {
+    callback_query_id: callbackId,
+    text: text,
+    show_alert: showAlert
+  };
+  
+  return callTelegramAPI_('answerCallbackQuery', payload);
+}
+
+/**
+ * Универсальный вызов Telegram Bot API
+ */
+function callTelegramAPI_(method, payload) {
+  const url = TELEGRAM_API + '/' + method;
+  
+  const options = {
+    method: 'POST',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+  
+  try {
+    const response = UrlFetchApp.fetch(url, options);
+    const result = JSON.parse(response.getContentText());
+    
+    if (!result.ok) {
+      logEvent_('telegram_api', 'API_ERROR', { 
+        method: method, 
+        error: result.description,
+        payload: payload 
+      });
+    }
+    
+    return result;
+    
+  } catch (error) {
+    logEvent_('telegram_api', 'FETCH_EXCEPTION', { 
+      method: method, 
+      error: error.toString() 
+    });
+    return { ok: false, error: error.toString() };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Проверка: является ли пользователь админом
+ */
+function isUserAdmin_(userId) {
+  const sheet = getSheet_(SHEET_NAMES.SETTINGS);
+  const data = sheet.getDataRange().getValues();
+  
+  for (let i = 0; i < data.length; i++) {
+    if (String(data[i][0]) === 'admin_ids') {
+      const adminIds = String(data[i][1])
+        .split(',')
+        .map(function (s) { return s.trim(); })
+        .filter(function (s) { return s !== ''; });
+      return adminIds.indexOf(String(userId)) !== -1;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Идемпотентность: проверка дублей update_id.
+ * Два контура: быстрый кэш (6 часов) + счётчик last_update_id в «Настройках».
+ */
+function isDuplicateUpdate_(updateId) {
+  if (!updateId) return false;
+  // Контур 1: кэш
+  if (CacheService.getScriptCache().get('upd_' + updateId)) return true;
+  // Контур 2: update_id монотонно возрастает — всё ниже последнего уже обработано
+  const last = parseInt(getSetting_('last_update_id') || '0', 10);
+  if (updateId <= last) return true;
+  return false;
+}
+
+/**
+ * Пометить update_id как обработанный (кэш + счётчик в «Настройках»).
+ */
+function markUpdateProcessed_(updateId) {
+  if (!updateId) return;
+  CacheService.getScriptCache().put('upd_' + updateId, '1', 21600); // 6 часов
+  const sheet = getSheet_(SHEET_NAMES.SETTINGS);
+  const data = sheet.getDataRange().getValues();
+  for (let i = 0; i < data.length; i++) {
+    if (String(data[i][0]) === 'last_update_id') {
+      const current = parseInt(String(data[i][1]), 10) || 0;
+      if (updateId > current) sheet.getRange(i + 1, 2).setValue(updateId);
+      return;
+    }
+  }
+}
+
+/**
+ * Логирование событий в лист "Журнал"
+ */
+function logEvent_(category, event, details = {}) {
+  try {
+    const sheet = getSheet_(SHEET_NAMES.LOG);
+    const timestamp = new Date();
+    const updateId = details.update_id || 0;
+    const chatId = details.chat_id || 0;
+    const userId = details.user_id || 0;
+    
+    sheet.appendRow([
+      timestamp,
+      updateId,
+      chatId,
+      userId,
+      category + '::' + event,
+      JSON.stringify(details)
+    ]);
+    
+  } catch (error) {
+    // Если логирование упало — пишем в консоль, но не прерываем выполнение
+    console.error('Log error:', error.toString());
+  }
+}
+
+/**
+ * Получить лист таблицы по имени
+ */
+function getSheet_(name) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(name);
+  
+  if (!sheet) {
+    throw new Error(`Лист "${name}" не найден!`);
+  }
+  
+  return sheet;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// УСТАНОВКА WEBHOOK (без UI, универсальная)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Установить webhook автоматически через Telegram API.
+ * Результат смотрите в Журнале выполнения (Execution log) внизу редактора.
+ */
+function setupWebhook() {
+  const DEPLOYMENT_ID = 'AKfycbx4FwsFBGRCgi1u3amj50uxd6uaalDqu8NuPyAMiu5xk223ANYRJgrsVXE1cF94byBP';
+  const serviceUrl = `https://script.google.com/macros/s/${DEPLOYMENT_ID}/exec`;
+  
+  const webhookUrl = `${serviceUrl}?secret=${WEBHOOK_SECRET}`;
+  console.log('⏳ Устанавливаем webhook...');
+  console.log('URL:', webhookUrl);
+  
+  // Проверяем URL на корректность
+  if (!webhookUrl.includes('/exec?secret=')) {
+    console.error('❌ Некорректный URL! Должен содержать /exec?secret=');
+    return;
+  }
+  
+  const payload = {
+    url: webhookUrl,
+    allowed_updates: ['message', 'callback_query'],
+    drop_pending_updates: true // Сбрасываем старые 401-ошибки
+  };
+  
+  const result = callTelegramAPI_('setWebhook', payload);
+  
+  if (result.ok) {
+    console.log('✅ Webhook установлен успешно!');
+    console.log('Результат:', JSON.stringify(result.result, null, 2));
+    
+    // Ждём 3 секунды и проверяем статус
+    Utilities.sleep(3000);
+    
+    const info = callTelegramAPI_('getWebhookInfo', {});
+    if (info.ok) {
+      console.log('📊 Текущий статус webhook:');
+      console.log(JSON.stringify(info.result, null, 2));
+      
+      if (info.result.last_error_message) {
+        console.warn('⚠️ Есть ошибка в webhook:', info.result.last_error_message);
+        console.warn('Проверьте доступ развёртывания: Развернуть → Управление развёртываниями → Должно быть "Все"');
+      } else {
+        console.log('🎉 Webhook работает без ошибок!');
+      }
+    }
+  } else {
+    console.error('❌ Ошибка установки webhook:', result.description);
+  }
+}
+
+/**
+ * Получить информацию о текущем webhook
+ */
+function getWebhookInfo() {
+  const result = callTelegramAPI_('getWebhookInfo', {});
+  
+  if (result.ok) {
+    console.log('📊 Информация о webhook:');
+    console.log(JSON.stringify(result.result, null, 2));
+  } else {
+    console.error('❌ Ошибка getWebhookInfo:', result.description);
+  }
+}
+
+/**
+ * Удалить webhook (для отладки)
+ */
+function deleteWebhook() {
+  console.log('⏳ Удаляем webhook...');
+  const result = callTelegramAPI_('deleteWebhook', {drop_pending_updates: true});
+  
+  if (result.ok) {
+    console.log('✅ Webhook удалён, накопленные обновления сброшены.');
+  } else {
+    console.error('❌ Ошибка удаления:', result.description);
+  }
+}
+
+/**
+ * Сбросить накопившиеся обновления (если бот "захлебнулся")
+ */
+function resetPendingUpdates() {
+  const result = callTelegramAPI_('deleteWebhook', {drop_pending_updates: true});
+  if (result.ok) {
+    console.log('✅ Накопленные обновления сброшены. Переустановите webhook через setupWebhook.');
+  } else {
+    console.error('❌ Ошибка:', result.description);
+  }
+}
+
+/**
+ * Принудительный запрос разрешений для UrlFetchApp.
+ * Запустите ОДИН РАЗ, примите разрешения, затем удалите эту функцию.
+ */
+function requestPermissions() {
+  // Простой запрос к Google, чтобы появилось окно авторизации
+  UrlFetchApp.fetch('https://www.google.com');
+  console.log('✅ Разрешения получены! Теперь запустите setupWebhook.');
+}
+
+/**
+ * Диагностика: показывает текущее значение WEBHOOK_SECRET.
+ * Запустите, чтобы убедиться, что свойство задано правильно.
+ */
+function debugWebhookSecret() {
+  const secret = SCRIPT_PROPS.getProperty('WEBHOOK_SECRET');
+  
+  console.log('🔍 Диагностика WEBHOOK_SECRET:');
+  console.log('Значение:', secret);
+  console.log('Тип:', typeof secret);
+  console.log('Длина:', secret ? secret.length : 0);
+  console.log('Ожидаемое из URL: priyutino_2026_secret_xyz123');
+  console.log('Длина ожидаемого: 33');
+  
+  if (!secret) {
+    console.error('❌ Свойство WEBHOOK_SECRET не задано!');
+    console.error('Создайте его: ⚙️ Свойства сценария → Добавить свойство сценария');
+  } else if (secret === 'priyutino_2026_secret_xyz123') {
+    console.log('✅ Значение совпадает с URL!');
+  } else {
+    console.error('❌ Значение НЕ совпадает!');
+    console.error('Получено:', JSON.stringify(secret));
+    console.error('Ожидалось: "priyutino_2026_secret_xyz123"');
+    console.error('Проверьте Script Properties на пробелы и регистр.');
+  }
+}
+
+/**
+ * Тестовый GET-запрос для проверки доступности URL.
+ * Откройте URL вашего веб-приложения в браузере, чтобы увидеть этот текст.
+ */
+function doGet(e) {
+  const response = `✅ Бот Приютино работает!\n\n` +
+                   `Время сервера: ${new Date().toISOString()}\n` +
+                   `Секрет в URL: ${e.parameter.secret || 'не передан'}\n` +
+                   `Токен бота загружен: ${!!BOT_TOKEN}`;
+  
+  return ContentService.createTextOutput(response).setMimeType(ContentService.MimeType.TEXT);
+}
