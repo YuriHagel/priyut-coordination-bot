@@ -1,0 +1,543 @@
+/**
+ * Модуль поездок: создание (wizard админа), публикация в канал,
+ * отклик волонтёра, подтверждение админом, срочные рассылки.
+ * ТЗ v2: разд. 6.2, 6.3, 6.4 (частично), 9 (очередь рассылок).
+ */
+
+// ─────────── Сессии wizard поездки ───────────
+
+function getTripSession_(userId) {
+  const raw = CacheService.getScriptCache().get('tripw_' + userId);
+  return raw ? JSON.parse(raw) : null;
+}
+function saveTripSession_(userId, session) {
+  CacheService.getScriptCache().put('tripw_' + userId, JSON.stringify(session), 3600);
+}
+function clearTripSession_(userId) {
+  CacheService.getScriptCache().remove('tripw_' + userId);
+}
+
+// ─────────── /new_trip: старт wizard ───────────
+
+function cmdNewTrip_(chatId, userId) {
+  if (!isUserAdmin_(userId)) {
+    sendMessage_(chatId, '⛔ Команда доступна только администраторам.');
+    return;
+  }
+  saveTripSession_(userId, { step: 'route_from', data: {} });
+  sendMessageWithButtons_(chatId,
+    '🚕 Создание новой поездки\n\nОткуда забираем?',
+    [[{ text: '🏠 Приют', callback_data: 'tw:from:shelter' }]]);
+  sendMessage_(chatId, '(или напишите адрес свободным текстом)');
+}
+
+// ─────────── Текстовые шаги wizard ───────────
+
+function processTripText_(userId, chatId, text, session) {
+  const step = session.step;
+
+  if (step === 'route_from') {
+    session.data.route_from = text;
+    session.step = 'route_to';
+    saveTripSession_(userId, session);
+    sendMessage_(chatId, '📍 Куда нужно отвезти животное?\n(клиника и адрес)');
+  }
+  else if (step === 'route_to') {
+    session.data.route_to = text;
+    session.step = 'datetime';
+    saveTripSession_(userId, session);
+    sendMessage_(chatId, '🕐 Дата и время поездки?\n(формат: ДД.ММ ЧЧ:ММ или ДД.ММ.ГГГГ ЧЧ:ММ)');
+  }
+  else if (step === 'datetime') {
+    const d = parseTripDateTime_(text);
+    if (!d) {
+      sendMessage_(chatId, '⚠️ Не распознал дату. Формат: ДД.ММ ЧЧ:ММ\nПример: 15.11 14:00');
+      return;
+    }
+    if (d.getTime() < Date.now()) {
+      sendMessage_(chatId, '⚠️ Дата и время в прошлом. Укажите будущую дату.');
+      return;
+    }
+    session.data.datetime = d.getTime(); // храним как timestamp в сессии
+    session.step = 'task';
+    saveTripSession_(userId, session);
+    sendMessage_(chatId, '🐾 Кого везём и зачем?\n(краткое описание)');
+  }
+  else if (step === 'task') {
+    const san = sanitizeFreeText_(text);
+    session.data.task = san.clean;
+    session.step = 'type';
+    saveTripSession_(userId, session);
+    sendMessageWithButtons_(chatId, 'Тип поездки?', [[
+      { text: '🟢 Обычная', callback_data: 'tw:type:Обычная' },
+      { text: '🔴 Срочная', callback_data: 'tw:type:Срочная' }
+    ]]);
+    if (san.flagged) sendMessage_(chatId, '⚠️ Часть текста, похожая на ПДн, удалена фильтром.');
+  }
+  else if (step === 'comment') {
+    const san = sanitizeFreeText_(text);
+    session.data.comment = san.clean;
+    session.step = 'preview';
+    saveTripSession_(userId, session);
+    sendTripPreview_(chatId, session);
+  }
+  else {
+    sendMessage_(chatId, 'Сейчас выберите вариант кнопками ниже 👇');
+  }
+}
+
+// ─────────── Кнопки wizard ───────────
+
+function handleTripWizardCallback_(userId, chatId, data) {
+  if (!isUserAdmin_(userId)) {
+    sendMessage_(chatId, '⛔ Доступно только администраторам.');
+    return;
+  }
+  const parts = data.split(':');
+  const act = parts[1];
+
+  let session = getTripSession_(userId);
+  if (!session && act !== 'cancel') {
+    sendMessage_(chatId, 'Сессия создания поездки истекла. Начните заново: /new_trip');
+    return;
+  }
+
+  if (act === 'from') {
+    session.data.route_from = 'Приют';
+    session.step = 'route_to';
+    saveTripSession_(userId, session);
+    sendMessage_(chatId, '📍 Куда нужно отвезти животное?\n(клиника и адрес)');
+  }
+  else if (act === 'type') {
+    session.data.trip_type = parts[2];
+    session.step = 'comment';
+    saveTripSession_(userId, session);
+    sendMessageWithButtons_(chatId,
+      '💬 Комментарий (необязательно):',
+      [[{ text: '⏭ Пропустить', callback_data: 'tw:skipcomment' }]]);
+  }
+  else if (act === 'skipcomment') {
+    session.data.comment = '';
+    session.step = 'preview';
+    saveTripSession_(userId, session);
+    sendTripPreview_(chatId, session);
+  }
+  else if (act === 'publish') {
+    publishTrip_(userId, chatId, session);
+  }
+  else if (act === 'edit') {
+    session.step = 'route_from';
+    saveTripSession_(userId, session);
+    sendMessageWithButtons_(chatId,
+      '✏️ Редактирование. Откуда забираем?',
+      [[{ text: '🏠 Приют', callback_data: 'tw:from:shelter' }]]);
+  }
+  else if (act === 'cancel') {
+    clearTripSession_(userId);
+    sendMessage_(chatId, '❌ Создание поездки отменено.');
+  }
+}
+
+function sendTripPreview_(chatId, session) {
+  const d = session.data;
+  const text =
+    '📋 Проверьте заявку:\n\n' +
+    (d.trip_type === 'Срочная' ? '🔴 СТАТУС: СРОЧНАЯ\n' : '🟢 Обычная поездка\n') +
+    '📍 Маршрут: ' + d.route_from + ' → ' + d.route_to + '\n' +
+    '🕐 Время: ' + formatDt_(new Date(d.datetime)) + '\n' +
+    '🐾 Задача: ' + d.task + '\n' +
+    (d.comment ? '💬 ' + d.comment + '\n' : '');
+  sendMessageWithButtons_(chatId, text, [[
+    { text: '📢 Опубликовать', callback_data: 'tw:publish' },
+    { text: '✏️ Изменить', callback_data: 'tw:edit' },
+    { text: '❌ Отмена', callback_data: 'tw:cancel' }
+  ]]);
+}
+
+// ─────────── Публикация ───────────
+
+function publishTrip_(userId, chatId, session) {
+  if (!isUserAdmin_(userId)) {
+    sendMessage_(chatId, '⛔ Доступно только администраторам.');
+    return;
+  }
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+  ensureTripsColumns_(sheet);
+
+  const d = session.data;
+  const now = new Date();
+  const newRow = sheet.getLastRow() + 1;
+  const tripId = newRow - 1;
+
+  sheet.appendRow([
+    tripId, now, new Date(d.datetime), d.route_from, d.route_to,
+    d.task, d.trip_type, d.comment || '', 'Опубликована',
+    '', '', 0, 0, '', '', ''
+  ]);
+
+  // Пост в канал с кнопками
+  const channelId = getSetting_('channel_id');
+  const buttons = [[
+    { text: '🚕 Готов поехать', callback_data: 'resp:' + tripId },
+    { text: '❌ Пропустить', callback_data: 'skip:' + tripId }
+  ]];
+  const res = sendMessageWithButtons_(channelId, tripCardText_(tripId, d, ''), buttons);
+  if (res && res.ok) {
+    sheet.getRange(newRow, 17).setValue(res.result.message_id);
+  } else {
+    logEvent_('trips', 'CHANNEL_POST_FAILED', { trip_id: tripId, error: res && res.description });
+    sendMessage_(chatId, '⚠️ Не удалось опубликовать пост в канал. Проверьте, что бот — админ канала.');
+  }
+
+  // Срочная → персональная рассылка через очередь
+  let broadcastNote = '';
+  if (d.trip_type === 'Срочная' && getSetting_('urgent_broadcast_enabled') === '1') {
+    const n = enqueueBroadcast_(tripId);
+    broadcastNote = '\n🔔 Персональная рассылка поставлена в очередь: ' + n + ' волонтёров.';
+  }
+
+  clearTripSession_(userId);
+  sendMessage_(chatId, '✅ Заявка #' + tripId + ' опубликована!' + broadcastNote);
+  logEvent_('trips', 'TRIP_PUBLISHED', { trip_id: tripId, type: d.trip_type });
+}
+
+function ensureTripsColumns_(sheet) {
+  if (sheet.getLastColumn() < 17) {
+    sheet.getRange(1, 17).setValue('channel_message_id').setFontWeight('bold');
+  }
+}
+
+// ─────────── Отклик волонтёра ───────────
+
+function handleTripResponse_(userId, chatId, data) {
+  const parts = data.split(':');
+  const isResponse = parts[0] === 'resp';
+  const tripId = parseInt(parts[1], 10);
+  const t = findTripById_(tripId);
+
+  if (!t) {
+    sendMessage_(chatId, '❌ Поездка не найдена.');
+    return;
+  }
+
+  if (!isResponse) {
+    logEvent_('trips', 'TRIP_SKIPPED', { trip_id: tripId, user_id: userId });
+    sendMessage_(chatId, 'Принято! Не буду беспокоить вас по поездке #' + tripId + '.');
+    return;
+  }
+
+  const vol = findVolunteerByTgId_(userId);
+  if (!vol || vol.status !== 'Одобрен') {
+    sendMessage_(chatId, 'Откликаться могут только одобренные волонтёры.\nСтатус вашей анкеты: ' + (vol ? vol.status : 'не зарегистрированы'));
+    return;
+  }
+  if (t.status !== 'Опубликована') {
+    sendMessage_(chatId, 'ℹ️ Поездка #' + tripId + ' уже занята или закрыта.');
+    return;
+  }
+  if (alreadyResponded_(tripId, userId)) {
+    sendMessage_(chatId, 'Вы уже откликнулись на поездку #' + tripId + '. Ожидайте решения админа.');
+    return;
+  }
+
+  appendResponse_(tripId, userId, vol.nickname, 'отклик', '');
+  setTripStatus_(t.row, 'На рассмотрении');
+  sendMessage_(chatId, '✅ Ваш отклик отправлен администратору!\nСтатус: ⏳ На рассмотрении.');
+
+  const card =
+    '⚠️ Отклик на поездку #' + tripId + '!\n\n' +
+    '👤 ' + vol.nickname + '\n' +
+    '🚗 ' + vol.car + '\n' +
+    '📍 ' + vol.areas + '\n' +
+    '⏰ ' + vol.availability_days + ', ' + vol.availability_time + '\n\n' +
+    tripCardText_(tripId, t, '');
+
+  getAdminIds_().forEach(function (adminId) {
+    sendMessageWithButtons_(adminId, card, [[
+      { text: '✅ Подтвердить', callback_data: 'tappr:' + tripId + ':' + userId },
+      { text: '❌ Отклонить', callback_data: 'trej:' + tripId + ':' + userId }
+    ]]);
+  });
+
+  logEvent_('trips', 'TRIP_RESPONSE', { trip_id: tripId, user_id: userId });
+}
+
+// ─────────── Подтверждение / отклонение админом ───────────
+
+function handleTripModeration_(userId, chatId, data) {
+  if (!isUserAdmin_(userId)) {
+    sendMessage_(chatId, '⛔ Доступно только администраторам.');
+    return;
+  }
+  const parts = data.split(':');
+  const tripId = parseInt(parts[1], 10);
+  const volTg = parts[2];
+  const t = findTripById_(tripId);
+
+  if (!t || t.status !== 'На рассмотрении') {
+    sendMessage_(chatId, 'ℹ️ Поездка #' + tripId + ' уже обработана или не на рассмотрении.');
+    return;
+  }
+
+  const vol = findVolunteerByTgId_(volTg);
+  const nick = vol ? vol.nickname : 'волонтёр';
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+
+  if (parts[0] === 'tappr') {
+    setTripStatus_(t.row, 'Занята');
+    sheet.getRange(t.row, 10).setValue(volTg);
+    sheet.getRange(t.row, 11).setValue(nick);
+    appendResponse_(tripId, volTg, nick, 'подтверждён', '');
+
+    const adminContact = getSetting_('admin_contact') || 'напишите админу в чат этого бота';
+    sendMessage_(volTg,
+      '✅ Вас подтвердили на поездку #' + tripId + '!\n\n' +
+      tripCardText_(tripId, t, '') + '\n' +
+      '📞 Контакт админа: ' + adminContact + '\n' +
+      '📅 Напоминания придут за 24 часа и за 2 часа.');
+
+    notifyOtherResponders_(tripId, volTg,
+      'ℹ️ Поездка #' + tripId + ' закрыта. Исполнитель найден. Спасибо за готовность помочь!');
+
+    updateChannelPost_(t.row, tripCardText_(tripId, t, '✅ Исполнитель: ' + nick));
+
+    sendMessage_(chatId, '✅ Поездка #' + tripId + ' назначена: ' + nick + '.');
+    logEvent_('trips', 'TRIP_ASSIGNED', { trip_id: tripId, volunteer: volTg });
+  } else {
+    setTripStatus_(t.row, 'Опубликована');
+    appendResponse_(tripId, volTg, nick, 'отклонён', '');
+    sendMessage_(volTg, '❌ По поездке #' + tripId + ' выбран другой волонтёр. Спасибо за отклик!');
+    sendMessage_(chatId, '❌ Отклик ' + nick + ' отклонён. Поездка снова опубликована.');
+    logEvent_('trips', 'TRIP_RESPONSE_REJECTED', { trip_id: tripId, volunteer: volTg });
+  }
+}
+
+// ─────────── Списки поездок ───────────
+
+function cmdTrips_(chatId, userId) {
+  if (!isUserAdmin_(userId)) {
+    sendMessage_(chatId, '⛔ Доступно только администраторам.');
+    return;
+  }
+  const list = getTripsByStatuses_(['Опубликована', 'На рассмотрении', 'Занята', 'На проверке']);
+  if (list.length === 0) {
+    sendMessage_(chatId, '📭 Активных поездок нет.');
+    return;
+  }
+  let text = '📋 Активные поездки:\n\n';
+  list.forEach(function (t) {
+    text += '#' + t.id + ' | ' + formatDt_(t.datetime) + ' | ' + t.route_to +
+            '\n   Статус: ' + t.status + (t.assigned_nick ? ' (' + t.assigned_nick + ')' : '') + '\n';
+  });
+  text += '\nОтмена и перенос времени — следующий модуль.';
+  sendMessage_(chatId, text);
+}
+
+function cmdOpenTrips_(chatId, userId) {
+  const vol = findVolunteerByTgId_(userId);
+  if (!vol || vol.status !== 'Одобрен') {
+    sendMessage_(chatId, 'Открытые заявки доступны одобренным волонтёрам.');
+    return;
+  }
+  const list = getTripsByStatuses_(['Опубликована']).slice(0, 5);
+  if (list.length === 0) {
+    sendMessage_(chatId, '📭 Открытых заявок сейчас нет.');
+    return;
+  }
+  list.forEach(function (t) {
+    sendMessageWithButtons_(chatId, tripCardText_(t.id, t, ''), [[
+      { text: '🚕 Готов поехать', callback_data: 'resp:' + t.id },
+      { text: '❌ Пропустить', callback_data: 'skip:' + t.id }
+    ]]);
+  });
+}
+
+// ─────────── Очередь срочных рассылок ───────────
+
+function enqueueBroadcast_(tripId) {
+  const volSheet = getSheet_(SHEET_NAMES.VOLUNTEERS);
+  const q = getSheet_(SHEET_NAMES.QUEUE);
+  const last = volSheet.getLastRow();
+  if (last < 2) return 0;
+
+  const vals = volSheet.getRange(2, 1, last - 1, 12).getValues();
+  const now = new Date();
+  const rows = [];
+  vals.forEach(function (r) {
+    if (String(r[9]) === 'Одобрен') {
+      rows.push(['urgent_' + tripId, r[1], tripId, 'pending', now, '']);
+    }
+  });
+  if (rows.length) {
+    q.getRange(q.getLastRow() + 1, 1, rows.length, 6).setValues(rows);
+  }
+  scheduleQueueProcessor_();
+  return rows.length;
+}
+
+function scheduleQueueProcessor_() {
+  const exists = ScriptApp.getProjectTriggers().some(function (t) {
+    return t.getHandlerFunction() === 'processBroadcastQueue';
+  });
+  if (!exists) {
+    ScriptApp.newTrigger('processBroadcastQueue').timeBased().after(60000).create();
+  }
+}
+
+function processBroadcastQueue() {
+  // Удаляем собственный триггер (он одноразовый)
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'processBroadcastQueue') ScriptApp.deleteTrigger(t);
+  });
+
+  const q = getSheet_(SHEET_NAMES.QUEUE);
+  const last = q.getLastRow();
+  if (last < 2) return;
+
+  const vals = q.getRange(2, 1, last - 1, 6).getValues();
+  const chunk = parseInt(getSetting_('urgent_broadcast_chunk') || '100', 10);
+  let sent = 0;
+
+  for (let i = 0; i < vals.length && sent < chunk; i++) {
+    if (String(vals[i][3]) !== 'pending') continue;
+    const row = i + 2;
+    const tg = vals[i][1];
+    const tripId = vals[i][2];
+    const t = findTripById_(tripId);
+
+    if (!t || (t.status !== 'Опубликована' && t.status !== 'На рассмотрении')) {
+      q.getRange(row, 4).setValue('skipped');
+      q.getRange(row, 6).setValue(new Date());
+      continue;
+    }
+
+    const res = sendMessageWithButtons_(tg,
+      '🔔 ' + tripCardText_(tripId, t, '🔴 СРОЧНАЯ! Откликнитесь, если можете помочь.'),
+      [[
+        { text: '🚕 Готов поехать', callback_data: 'resp:' + tripId },
+        { text: '❌ Пропустить', callback_data: 'skip:' + tripId }
+      ]]);
+
+    q.getRange(row, 4).setValue(res && res.ok ? 'sent' : 'failed');
+    q.getRange(row, 6).setValue(new Date());
+    sent++;
+  }
+
+  const remain = q.getRange(2, 4, Math.max(1, q.getLastRow() - 1), 1).getValues()
+    .filter(function (r) { return String(r[0]) === 'pending'; }).length;
+  if (remain > 0) scheduleQueueProcessor_();
+
+  console.log('📨 Очередь рассылки: отправлено ' + sent + ', осталось ' + remain);
+}
+
+// ─────────── Вспомогательные ───────────
+
+function parseTripDateTime_(text) {
+  const m = text.trim().match(/^(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\s+(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const day = +m[1], month = +m[2];
+  const year = m[3] ? +m[3] : new Date().getFullYear();
+  const hh = +m[4], mm = +m[5];
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hh > 23 || mm > 59) return null;
+  const d = new Date(year, month - 1, day, hh, mm, 0, 0);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function formatDt_(d) {
+  const dt = (d instanceof Date) ? d : new Date(d);
+  return Utilities.formatDate(dt, 'Europe/Moscow', 'dd.MM HH:mm');
+}
+
+function tripCardText_(tripId, d, extra) {
+  const isUrgent = (d.trip_type === 'Срочная');
+  return (isUrgent ? '🚨 СРОЧНАЯ заявка #' : '🆕 Новая заявка #') + tripId + '\n' +
+    '📍 Маршрут: ' + d.route_from + ' → ' + d.route_to + '\n' +
+    '🕐 Время: ' + formatDt_(d.datetime) + '\n' +
+    '🐾 Задача: ' + d.task + '\n' +
+    (d.comment ? '💬 ' + d.comment + '\n' : '') +
+    (extra ? '\n' + extra : '');
+}
+
+function findTripById_(tripId) {
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+  const last = sheet.getLastRow();
+  if (last < 2) return null;
+  const vals = sheet.getRange(2, 1, last - 1, 17).getValues();
+  for (let i = 0; i < vals.length; i++) {
+    if (String(vals[i][0]) === String(tripId)) {
+      return {
+        row: i + 2, id: vals[i][0], datetime: vals[i][2],
+        route_from: vals[i][3], route_to: vals[i][4], task: vals[i][5],
+        trip_type: vals[i][6], comment: vals[i][7], status: vals[i][8],
+        assigned_tg: vals[i][9], assigned_nick: vals[i][10], message_id: vals[i][16]
+      };
+    }
+  }
+  return null;
+}
+
+function getTripsByStatuses_(statuses) {
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+  const last = sheet.getLastRow();
+  if (last < 2) return [];
+  const vals = sheet.getRange(2, 1, last - 1, 17).getValues();
+  const out = [];
+  vals.forEach(function (r) {
+    if (statuses.indexOf(String(r[8])) !== -1) {
+      out.push({
+        row: 0 + (vals.indexOf(r) + 2), id: r[0], datetime: r[2],
+        route_from: r[3], route_to: r[4], task: r[5], trip_type: r[6],
+        comment: r[7], status: r[8], assigned_nick: r[10]
+      });
+    }
+  });
+  return out;
+}
+
+function setTripStatus_(row, status) {
+  getSheet_(SHEET_NAMES.TRIPS).getRange(row, 9).setValue(status);
+}
+
+function appendResponse_(tripId, tgId, nickname, action, reason) {
+  const resp = getSheet_(SHEET_NAMES.RESPONSES);
+  resp.appendRow([resp.getLastRow(), tripId, tgId, nickname, action, reason, new Date()]);
+}
+
+function alreadyResponded_(tripId, userId) {
+  const sheet = getSheet_(SHEET_NAMES.RESPONSES);
+  const last = sheet.getLastRow();
+  if (last < 2) return false;
+  const vals = sheet.getRange(2, 1, last - 1, 7).getValues();
+  return vals.some(function (r) {
+    return String(r[1]) === String(tripId) && String(r[2]) === String(userId) && String(r[4]) === 'отклик';
+  });
+}
+
+function notifyOtherResponders_(tripId, exceptTgId, text) {
+  const sheet = getSheet_(SHEET_NAMES.RESPONSES);
+  const last = sheet.getLastRow();
+  if (last < 2) return;
+  const vals = sheet.getRange(2, 1, last - 1, 7).getValues();
+  const notified = {};
+  vals.forEach(function (r) {
+    const tg = r[2];
+    if (String(r[1]) === String(tripId) && String(r[4]) === 'отклик' &&
+        String(tg) !== String(exceptTgId) && !notified[tg]) {
+      notified[tg] = true;
+      sendMessage_(tg, text);
+    }
+  });
+}
+
+function updateChannelPost_(tripRow, newText) {
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+  const msgId = sheet.getRange(tripRow, 17).getValue();
+  const channelId = getSetting_('channel_id');
+  if (!msgId || !channelId) return;
+  callTelegramAPI_('editMessageText', {
+    chat_id: channelId,
+    message_id: msgId,
+    text: newText,
+    reply_markup: JSON.stringify({ inline_keyboard: [] })
+  });
+}
