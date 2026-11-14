@@ -1,0 +1,159 @@
+/**
+ * Установка структуры базы данных для проекта «Приют» (MVP).
+ * Запуск: Меню редактора → Выполнить → setupDatabase.
+ */
+function setupDatabase() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // 0. Очистка старых листов (снимает старые защиты, если были)
+  const sheetNames = ['Волонтёры', 'Поездки', 'Отклики', 'Журнал', 'Настройки', 'Очередь'];
+  sheetNames.forEach(name => {
+    const s = ss.getSheetByName(name);
+    if (s) {
+      try { ss.deleteSheet(s); } catch(e) { /* игнор */ }
+    }
+  });
+
+  // 1. ЛИСТ «Волонтёры»
+  const volunteers = ss.insertSheet('Волонтёры');
+  const volHeaders = [
+    'volunteer_id', 'telegram_id', 'nickname', 'car', 'areas',
+    'availability_days', 'availability_time', 'animals', 'comments',
+    'status', 'registered_at', 'approved_at'
+  ];
+  volunteers.getRange(1, 1, 1, volHeaders.length).setValues([volHeaders])
+    .setFontWeight('bold').setBackground('#d9ead3');
+
+  // Валидация: статусы (ИСПРАВЛЕНО: убран третий параметр)
+  const volStatusRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(['На модерации', 'Одобрен', 'Отклонён', 'Недоступен', 'Удалён'], true)
+    .setAllowInvalid(false).build();
+  volunteers.getRange(2, 10, 1000, 1).setDataValidation(volStatusRule);
+
+  // Форматы
+  volunteers.getRange(2, 1, 1000, 1).setNumberFormat('0');           
+  volunteers.getRange(2, 2, 1000, 2).setNumberFormat('@');           
+  volunteers.getRange(2, 11, 1000, 2).setNumberFormat('dd.MM.yyyy HH:mm');
+
+  // 2. ЛИСТ «Поездки»
+  const trips = ss.insertSheet('Поездки');
+  const tripHeaders = [
+    'trip_id', 'created_at', 'trip_datetime', 'route_from', 'route_to',
+    'task', 'trip_type', 'comment', 'status',
+    'assigned_telegram_id', 'assigned_nickname',
+    'reminder24_flag', 'reminder2h_flag',
+    'volunteer_done_at', 'closed_at', 'cancel_reason'
+  ];
+  trips.getRange(1, 1, 1, tripHeaders.length).setValues([tripHeaders])
+    .setFontWeight('bold').setBackground('#f9cb9c');
+
+  const tripTypeRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(['Обычная', 'Срочная'], true).build();
+  trips.getRange(2, 7, 1000, 1).setDataValidation(tripTypeRule);
+
+  const tripStatusRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList([
+      'Черновик', 'Опубликована', 'На рассмотрении', 'Занята',
+      'На проверке', 'Выполнена', 'Отменена'
+    ], true).build();
+  trips.getRange(2, 9, 1000, 1).setDataValidation(tripStatusRule);
+
+  const flagRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(['0', '1'], true).build();
+  trips.getRange(2, 12, 1000, 2).setDataValidation(flagRule);
+
+  trips.getRange(2, 1, 1000, 1).setNumberFormat('0');
+  trips.getRange(2, 2, 1000, 3).setNumberFormat('dd.MM.yyyy HH:mm');
+  trips.getRange(2, 10, 1000, 1).setNumberFormat('@');
+  trips.getRange(2, 14, 1000, 2).setNumberFormat('dd.MM.yyyy HH:mm');
+
+  // 3. ЛИСТ «Отклики» (журнал действий)
+  const responses = ss.insertSheet('Отклики');
+  const respHeaders = [
+    'id', 'trip_id', 'telegram_id', 'nickname', 'action', 'reason', 'timestamp'
+  ];
+  responses.getRange(1, 1, 1, respHeaders.length).setValues([respHeaders])
+    .setFontWeight('bold').setBackground('#ffe599');
+
+  const actionRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList([
+      'отклик', 'подтверждён', 'отклонён', 'отмена',
+      'напоминание_да', 'напоминание_нет', 'выполнено',
+      'регистрация', 'отзыв_согласия'
+    ], true).build();
+  responses.getRange(2, 5, 1000, 1).setDataValidation(actionRule);
+
+  responses.getRange(2, 1, 1000, 3).setNumberFormat('0');
+  responses.getRange(2, 3, 1000, 1).setNumberFormat('@'); 
+  responses.getRange(2, 7, 1000, 1).setNumberFormat('dd.MM.yyyy HH:mm');
+
+  // 4. ЛИСТ «Журнал» (технический)
+  const log = ss.insertSheet('Журнал');
+  const logHeaders = ['timestamp', 'update_id', 'chat_id', 'user_id', 'event', 'details'];
+  log.getRange(1, 1, 1, logHeaders.length).setValues([logHeaders])
+    .setFontWeight('bold').setBackground('#c9daf8');
+  log.getRange(2, 1, 1000, 1).setNumberFormat('dd.MM.yyyy HH:mm');
+
+  // 5. ЛИСТ «Настройки»
+  const settings = ss.insertSheet('Настройки');
+  const settingsData = [
+    ['key', 'value', 'comment'],
+    ['admin_ids', '123456789,987654321', 'Telegram ID админов через запятую'],
+    ['channel_id', '@priyutino_avto', 'Канал публикаций (публичное имя или -100xxxx)'],
+    ['rules_version', '1.0', 'Версия Правил бота'],
+    ['rules_date', '31.10.2026', 'Дата публикации Правил'],
+    ['reminder_24h_enabled', '1', '1=вкл / 0=выкл'],
+    ['reminder_2h_enabled', '1', '1=вкл / 0=выкл'],
+    ['urgent_broadcast_enabled', '1', 'Персональная рассылка срочных'],
+    ['urgent_broadcast_chunk', '400', 'Размер чанка рассылки'],
+    ['last_update_id', '0', 'Последний обработанный update_id (идемпотентность)'],
+    ['backup_enabled', '1', 'Автобэкап файла Drive']
+  ];
+  settings.getRange(1, 1, settingsData.length, 3).setValues(settingsData);
+  settings.getRange(1, 1, 1, 3).setFontWeight('bold').setBackground('#d9d2e9');
+  settings.setColumnWidth(1, 260);
+  settings.setColumnWidth(2, 300);
+  settings.setColumnWidth(3, 400);
+
+  // 6. ЛИСТ «Очередь» (рассылки срочных)
+  const queue = ss.insertSheet('Очередь');
+  const queueHeaders = ['batch_id', 'telegram_id', 'trip_id', 'status', 'created_at', 'sent_at'];
+  queue.getRange(1, 1, 1, queueHeaders.length).setValues([queueHeaders])
+    .setFontWeight('bold').setBackground('#ea9999');
+
+  const queueStatusRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(['pending', 'sent', 'failed', 'skipped'], true).build();
+  queue.getRange(2, 4, 1000, 1).setDataValidation(queueStatusRule);
+
+  queue.getRange(2, 1, 1000, 3).setNumberFormat('0');
+  queue.getRange(2, 2, 1000, 1).setNumberFormat('@'); 
+  queue.getRange(2, 5, 1000, 2).setNumberFormat('dd.MM.yyyy HH:mm');
+
+  // 7. Защищённые диапазоны (только владелец файла может править вручную)
+  protectSheet_(volunteers, 'Волонтёры: только бот');
+  protectSheet_(trips, 'Поездки: только бот');
+  protectSheet_(responses, 'Отклики: только бот');
+  protectSheet_(log, 'Журнал: только бот');
+  protectSheet_(queue, 'Очередь: только бот');
+  // «Настройки» не защищаем — админ фонда должен иметь ручной доступ
+
+  // 8. Удаление листа по умолчанию (если он был пустым)
+  const defaultSheet = ss.getSheetByName('Лист1');
+  if (defaultSheet && defaultSheet.getLastRow() === 0 && defaultSheet.getLastColumn() === 0) {
+    try { ss.deleteSheet(defaultSheet); } catch (e) { /* игнор */ }
+  }
+
+  SpreadsheetApp.getUi().alert(
+    '✅ База данных создана!\n\n' +
+    'Листы: Волонтёры, Поездки, Отклики, Журнал, Настройки, Очередь.\n' +
+    'Защиты от ручных правок установлены (кроме «Настройки»).\n' +
+    'Далее: заполните «Настройки» (admin_ids, channel_id) и приступайте к разработке скрипта бота.'
+  );
+}
+
+/** Вспомогательные функции */
+function protectSheet_(sheet, description) {
+  const protection = sheet.protect().setDescription(description);
+  protection.removeEditors(protection.getEditors());
+  // Владелец файла остаётся редактором по умолчанию — это нормально
+}
