@@ -1,0 +1,413 @@
+/**
+ * Жизненный цикл поездки: /my_trips, отмены с причинами (сценарий Д),
+ * двухэтапное завершение (сценарий Е), перенос времени с подтверждением.
+ */
+
+// ─────────── Сессии (PropertiesService, гарантированное хранение) ───────────
+
+function getCnlSession_(userId) { return getPropSession_('cnl_' + userId); }
+function setCnlSession_(userId, obj) { setPropSession_('cnl_' + userId, obj); }
+function clearCnlSession_(userId) { PropertiesService.getScriptProperties().deleteProperty('cnl_' + userId); }
+function getChgSession_(userId) { return getPropSession_('chg_' + userId); }
+function setChgSession_(userId, obj) { setPropSession_('chg_' + userId, obj); }
+function clearChgSession_(userId) { PropertiesService.getScriptProperties().deleteProperty('chg_' + userId); }
+
+function getPropSession_(key) {
+  const raw = PropertiesService.getScriptProperties().getProperty(key);
+  if (!raw) return null;
+  try {
+    const s = JSON.parse(raw);
+    if (!s.ts || Date.now() - s.ts > 600 * 1000) { PropertiesService.getScriptProperties().deleteProperty(key); return null; }
+    return s;
+  } catch (e) {
+    PropertiesService.getScriptProperties().deleteProperty(key);
+    return null;
+  }
+}
+function setPropSession_(key, obj) {
+  obj.ts = Date.now();
+  PropertiesService.getScriptProperties().setProperty(key, JSON.stringify(obj));
+}
+
+// ─────────── /my_trips ───────────
+
+function cmdMyTrips_(chatId, userId) {
+  const vol = findVolunteerByTgId_(userId);
+  if (!vol || vol.status !== 'Одобрен') {
+    sendMessage_(chatId, 'Активные поездки доступны одобренным волонтёрам.');
+    return;
+  }
+  const list = getMyActiveTrips_(userId);
+  if (list.length === 0) {
+    sendMessage_(chatId, '📭 У вас нет активных поездок.\nОткрытые заявки: /open_trips');
+    return;
+  }
+  list.forEach(function (t) {
+    let buttons = [];
+    if (t.status === 'Занята') {
+      buttons = [[
+        { text: '🏁 Поездка выполнена', callback_data: 'tdone:' + t.id },
+        { text: '❌ Отменить', callback_data: 'tcnl:' + t.id }
+      ]];
+    } else if (t.status === 'На проверке') {
+      buttons = [[{ text: '⏳ Ожидает подтверждения админа', callback_data: 'tnop:' + t.id }]];
+    }
+    sendMessageWithButtons_(chatId,
+      '📋 Поездка #' + t.id + '\n' +
+      '📍 Маршрут: ' + t.route_from + ' → ' + t.route_to + '\n' +
+      '🕐 Время: ' + formatDt_(t.datetime) + '\n' +
+      '🐾 Задача: ' + t.task + '\n' +
+      'Статус: ' + (t.status === 'Занята' ? '✅ Подтверждено' : '⏳ На проверке'),
+      buttons);
+  });
+}
+
+function getMyActiveTrips_(userId) {
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+  const last = sheet.getLastRow();
+  if (last < 2) return [];
+  const vals = sheet.getRange(2, 1, last - 1, 17).getValues();
+  const out = [];
+  for (let i = 0; i < vals.length; i++) {
+    const r = vals[i];
+    if (String(r[9]) === String(userId) && (String(r[8]) === 'Занята' || String(r[8]) === 'На проверке')) {
+      out.push({ row: i + 2, id: r[0], datetime: r[2], route_from: r[3], route_to: r[4], task: r[5], trip_type: r[6], status: r[8] });
+    }
+  }
+  return out;
+}
+
+// ─────────── Сценарий Е: двухэтапное завершение ───────────
+
+function handleTripDone_(userId, chatId, tripId) {
+  const t = findTripById_(tripId);
+  if (!t || String(t.assigned_tg) !== String(userId)) { sendMessage_(chatId, '⛔ Это не ваша поездка.'); return; }
+  if (t.status !== 'Занята') { sendMessage_(chatId, 'ℹ️ Поездка #' + tripId + ' сейчас в статусе «' + t.status + '» — действие недоступно.'); return; }
+
+  setTripStatus_(t.row, 'На проверке');
+  getSheet_(SHEET_NAMES.TRIPS).getRange(t.row, 14).setValue(new Date());
+  appendResponse_(tripId, userId, t.assigned_nick, 'выполнено', '');
+
+  sendMessage_(chatId, '✅ Спасибо за работу!\nОжидайте подтверждения администратора.\nСтатус: ⏳ На проверке');
+
+  const card = 'ℹ️ Волонтёр сообщил о завершении поездки #' + tripId + '.\n' +
+    '👤 ' + t.assigned_nick + ' выполнил задачу.\n' + tripCardText_(tripId, t, '');
+  getAdminIds_().forEach(function (a) {
+    sendMessageWithButtons_(a, card, [[
+      { text: '✅ Закрыть поездку', callback_data: 'tclose:' + tripId },
+      { text: '❌ Вернуть на доработку', callback_data: 'trework:' + tripId }
+    ]]);
+  });
+  logEvent_('trips', 'TRIP_DONE_REPORTED', { trip_id: tripId, user_id: userId });
+}
+
+function handleTripClose_(userId, chatId, tripId) {
+  if (!isUserAdmin_(userId)) { sendMessage_(chatId, '⛔ Доступно только администраторам.'); return; }
+  const t = findTripById_(tripId);
+  if (!t || t.status !== 'На проверке') { sendMessage_(chatId, 'ℹ️ Поездка #' + tripId + ' не на проверке.'); return; }
+
+  setTripStatus_(t.row, 'Выполнена');
+  getSheet_(SHEET_NAMES.TRIPS).getRange(t.row, 15).setValue(new Date());
+  appendResponse_(tripId, t.assigned_tg, t.assigned_nick, 'закрыта', '');
+  updateChannelPost_(t.row, tripCardText_(tripId, t, '✅ Поездка выполнена. Исполнитель: ' + t.assigned_nick));
+
+  const stats = countVolunteerTrips_(t.assigned_tg);
+  sendMessage_(t.assigned_tg,
+    '🎉 Поездка #' + tripId + ' закрыта!\nСпасибо за помощь нашим подопечным! 🐾\n' +
+    '📊 Ваша статистика: ' + stats + ' поездок.');
+  sendMessage_(chatId, '✅ Поездка #' + tripId + ' закрыта. Данные сохранены в историю.\nЭкспорт CSV: /export_trips');
+  logEvent_('trips', 'TRIP_CLOSED', { trip_id: tripId, admin: userId });
+}
+
+function handleTripRework_(userId, chatId, tripId) {
+  if (!isUserAdmin_(userId)) { sendMessage_(chatId, '⛔ Доступно только администраторам.'); return; }
+  const t = findTripById_(tripId);
+  if (!t || t.status !== 'На проверке') { sendMessage_(chatId, 'ℹ️ Поездка #' + tripId + ' не на проверке.'); return; }
+
+  setTripStatus_(t.row, 'Занята');
+  getSheet_(SHEET_NAMES.TRIPS).getRange(t.row, 14).setValue('');
+  sendMessage_(t.assigned_tg, '↩️ Поездка #' + tripId + ' возвращена на доработку.\nНажмите «🏁 Поездка выполнена» в /my_trips ещё раз, когда завершите.');
+  sendMessage_(chatId, '↩️ Поездка #' + tripId + ' возвращена в статус «Занята».');
+  logEvent_('trips', 'TRIP_RETURNED_REWORK', { trip_id: tripId, admin: userId });
+}
+
+function countVolunteerTrips_(tgId) {
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+  const last = sheet.getLastRow();
+  if (last < 2) return 0;
+  const vals = sheet.getRange(2, 1, last - 1, 17).getValues();
+  let n = 0;
+  vals.forEach(function (r) {
+    if (String(r[9]) === String(tgId) && String(r[8]) === 'Выполнена') n++;
+  });
+  return n;
+}
+
+// ─────────── Сценарий Д: отмена волонтёром ───────────
+
+function handleTripCancelStart_(userId, chatId, tripId) {
+  const t = findTripById_(tripId);
+  if (!t || String(t.assigned_tg) !== String(userId) || t.status !== 'Занята') {
+    sendMessage_(chatId, 'ℹ️ Отмена недоступна для этой поездки.');
+    return;
+  }
+  sendMessageWithButtons_(chatId,
+    '⚠️ Вы собираетесь отменить поездку #' + tripId + '.\nЭто освободит место для другого волонтёра.\nВыберите причину:',
+    [[
+      { text: '🤒 Не смогу поехать', callback_data: 'tcnlr:' + tripId + ':sick' },
+      { text: '🕐 Изменить время', callback_data: 'tcnlr:' + tripId + ':time' }
+    ], [
+      { text: '❓ Другое', callback_data: 'tcnlr:' + tripId + ':other' }
+    ]]);
+}
+
+function handleTripCancelReason_(userId, chatId, parts) {
+  const tripId = parseInt(parts[1], 10);
+  const code = parts[2];
+  const t = findTripById_(tripId);
+  if (!t || String(t.assigned_tg) !== String(userId) || t.status !== 'Занята') {
+    sendMessage_(chatId, 'ℹ️ Отмена недоступна для этой поездки.');
+    return;
+  }
+  if (code === 'other') {
+    setCnlSession_(userId, { tripId: tripId });
+    sendMessage_(chatId, 'Опишите причину коротко (свободный текст, без персональных данных):');
+    return;
+  }
+  const reason = (code === 'sick') ? '🤒 Не смогу поехать' : '🕐 Изменить время';
+  applyVolunteerCancel_(userId, chatId, t, reason, code);
+}
+
+function processCancelReasonText_(userId, chatId, text) {
+  const s = getCnlSession_(userId);
+  if (!s) return;
+  clearCnlSession_(userId);
+  const san = sanitizeFreeText_(text);
+  const t = findTripById_(s.tripId);
+  if (!t) { sendMessage_(chatId, '❌ Поездка не найдена.'); return; }
+  applyVolunteerCancel_(userId, chatId, t, '❓ Другое: ' + san.clean, 'other');
+}
+
+function applyVolunteerCancel_(userId, chatId, t, reason, code) {
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+  appendResponse_(t.id, userId, t.assigned_nick, 'отмена', reason);
+
+  // «Изменить время» — поездка остаётся у волонтёра, решение за админом
+  if (code === 'time') {
+    sendMessage_(chatId, '🕐 Запрос на изменение времени передан администратору.\nПоездка пока остаётся за вами.');
+    const card = '🕐 Волонтёр просит изменить время поездки #' + t.id + '!\n' +
+      '👤 ' + t.assigned_nick + '\nПричина: ' + reason + '\n' + tripCardText_(t.id, t, '');
+    getAdminIds_().forEach(function (a) {
+      sendMessageWithButtons_(a, card, [[
+        { text: '🕐 Изменить время', callback_data: 'tchg:' + t.id },
+        { text: '❌ Отменить поездку', callback_data: 'tcancel:' + t.id }
+      ]]);
+    });
+    logEvent_('trips', 'TRIP_TIME_CHANGE_REQUESTED', { trip_id: t.id, user_id: userId });
+    return;
+  }
+
+  // Отмена: освобождаем поездку
+  setTripStatus_(t.row, 'Опубликована');
+  sheet.getRange(t.row, 10).setValue('');
+  sheet.getRange(t.row, 11).setValue('');
+  sheet.getRange(t.row, 12).setValue(0);
+  sheet.getRange(t.row, 13).setValue(0);
+
+  sendMessage_(chatId, '✅ Поездка #' + t.id + ' отменена.\n🙏 Спасибо, что предупредили!\nАдминистратор уведомлён, ищем нового волонтёра…');
+
+  const card = '⚠️ ВОЛОНТЁР ОТМЕНИЛ ПОЕЗДКУ #' + t.id + '!\n' +
+    '👤 ' + t.assigned_nick + ' отказался.\nПричина: ' + reason + '\n' + tripCardText_(t.id, t, '');
+  getAdminIds_().forEach(function (a) {
+    sendMessageWithButtons_(a, card, [[
+      { text: '🔍 Найти нового волонтёра', callback_data: 'trep:' + t.id },
+      { text: '❌ Отменить поездку', callback_data: 'tcancel:' + t.id }
+    ]]);
+  });
+  logEvent_('trips', 'TRIP_CANCELLED_BY_VOLUNTEER', { trip_id: t.id, user_id: userId, reason: reason });
+}
+
+// ─────────── Админ: переопубликация и полная отмена ───────────
+
+function handleTripRepublish_(userId, chatId, tripId) {
+  if (!isUserAdmin_(userId)) { sendMessage_(chatId, '⛔ Доступно только администраторам.'); return; }
+  const t = findTripById_(tripId);
+  if (!t || t.status !== 'Опубликована') { sendMessage_(chatId, 'ℹ️ Поездка #' + tripId + ' не в статусе «Опубликована».'); return; }
+
+  const channelId = getSetting_('channel_id');
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+  const buttons = [[
+    { text: '🚕 Готов поехать', callback_data: 'resp:' + tripId },
+    { text: '❌ Пропустить', callback_data: 'skip:' + tripId }
+  ]];
+  let msgId = t.message_id;
+  if (msgId) {
+    const res = callTelegramAPI_('editMessageText', {
+      chat_id: channelId, message_id: msgId,
+      text: tripCardText_(tripId, t, '🔍 Ищем нового волонтёра!'),
+      reply_markup: JSON.stringify({ inline_keyboard: buttons })
+    });
+    if (!res || !res.ok) msgId = '';
+  }
+  if (!msgId) {
+    const res2 = sendMessageWithButtons_(channelId, tripCardText_(tripId, t, '🔍 Ищем нового волонтёра!'), buttons);
+    if (res2 && res2.ok) sheet.getRange(t.row, 17).setValue(res2.result.message_id);
+  }
+  if (t.trip_type === 'Срочная' && getSetting_('urgent_broadcast_enabled') === '1') {
+    const n = enqueueBroadcast_(tripId);
+    sendMessage_(chatId, '🔔 Срочная рассылка снова в очереди: ' + n + ' волонтёров.');
+  }
+  sendMessage_(chatId, '✅ Поездка #' + tripId + ' переопубликована. Ищем волонтёра.');
+  logEvent_('trips', 'TRIP_REPUBLISHED', { trip_id: tripId, admin: userId });
+}
+
+function handleTripFullCancel_(userId, chatId, tripId) {
+  if (!isUserAdmin_(userId)) { sendMessage_(chatId, '⛔ Доступно только администраторам.'); return; }
+  const t = findTripById_(tripId);
+  if (!t || t.status === 'Выполнена' || t.status === 'Отменена') {
+    sendMessage_(chatId, 'ℹ️ Поездка #' + tripId + ' уже закрыта.');
+    return;
+  }
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+  setTripStatus_(t.row, 'Отменена');
+  sheet.getRange(t.row, 15).setValue(new Date());
+  sheet.getRange(t.row, 16).setValue(getLastCancelReason_(tripId) || 'отменена администратором');
+  updateChannelPost_(t.row, tripCardText_(tripId, t, '❌ ПОЕЗДКА ОТМЕНЕНА'));
+
+  if (t.assigned_tg) {
+    sendMessage_(t.assigned_tg, '❌ Поездка #' + tripId + ' отменена администратором.\n' + tripCardText_(tripId, t, ''));
+  }
+  sendMessage_(chatId, '✅ Поездка #' + tripId + ' отменена.');
+  logEvent_('trips', 'TRIP_CANCELLED_BY_ADMIN', { trip_id: tripId, admin: userId });
+}
+
+function getLastCancelReason_(tripId) {
+  const sheet = getSheet_(SHEET_NAMES.RESPONSES);
+  const last = sheet.getLastRow();
+  if (last < 2) return '';
+  const vals = sheet.getRange(2, 1, last - 1, 7).getValues();
+  for (let i = vals.length - 1; i >= 0; i--) {
+    if (String(vals[i][1]) === String(tripId) && String(vals[i][4]) === 'отмена') return String(vals[i][5]);
+  }
+  return '';
+}
+
+// ─────────── Перенос времени с подтверждением волонтёра ───────────
+
+function cmdChangeTime_(chatId, userId, arg) {
+  if (!isUserAdmin_(userId)) { sendMessage_(chatId, '⛔ Доступно только администраторам.'); return; }
+  if (arg) {
+    handleTripChangeTimeStart_(userId, chatId, parseInt(arg, 10));
+    return;
+  }
+  const list = getTripsByStatuses_(['Занята', 'На рассмотрении', 'Опубликована']);
+  if (list.length === 0) { sendMessage_(chatId, '📭 Нет поездок для переноса.'); return; }
+  list.forEach(function (t) {
+    sendMessageWithButtons_(chatId,
+      '#' + t.id + ' | ' + formatDt_(t.datetime) + ' | ' + t.route_to + ' | ' + t.status,
+      [[{ text: '🕐 Изменить время', callback_data: 'tchg:' + t.id }]]);
+  });
+}
+
+function handleTripChangeTimeStart_(userId, chatId, tripId) {
+  if (!isUserAdmin_(userId)) { sendMessage_(chatId, '⛔ Доступно только администраторам.'); return; }
+  const t = findTripById_(tripId);
+  if (!t || t.status === 'Выполнена' || t.status === 'Отменена') {
+    sendMessage_(chatId, 'ℹ️ Поездка #' + tripId + ' закрыта, перенос невозможен.');
+    return;
+  }
+  setChgSession_(userId, { tripId: tripId });
+  sendMessage_(chatId, '🕐 Введите новые дату и время поездки #' + tripId + ':\n(формат: ДД.ММ ЧЧ:ММ)');
+}
+
+function processChangeTimeText_(userId, chatId, text) {
+  const s = getChgSession_(userId);
+  if (!s) return;
+  const d = parseTripDateTime_(text);
+  if (!d) { sendMessage_(chatId, '⚠️ Не распознал дату. Формат: ДД.ММ ЧЧ:ММ\nПример: 16.11 10:00'); return; }
+  if (d.getTime() < Date.now()) { sendMessage_(chatId, '⚠️ Время в прошлом. Укажите будущую дату.'); return; }
+  clearChgSession_(userId);
+
+  const t = findTripById_(s.tripId);
+  if (!t) { sendMessage_(chatId, '❌ Поездка не найдена.'); return; }
+
+  if (t.assigned_tg) {
+    PropertiesService.getScriptProperties().setProperty('chgoffer_' + t.id, String(d.getTime()));
+    sendMessageWithButtons_(t.assigned_tg,
+      '🕐 Админ предлагает новое время поездки #' + t.id + ':\n' +
+      'Было: ' + formatDt_(t.datetime) + '\nСтало: ' + formatDt_(d) + '\n\n' + tripCardText_(t.id, t, ''),
+      [[
+        { text: '✅ Подтверждаю новое время', callback_data: 'tconf:' + t.id },
+        { text: '❌ Не смогу', callback_data: 'tref:' + t.id }
+      ]]);
+    sendMessage_(chatId, '⏳ Новое время предложено волонтёру. Ожидаем подтверждения.');
+  } else {
+    applyNewTime_(t, d);
+    sendMessage_(chatId, '✅ Время поездки #' + t.id + ' изменено на ' + formatDt_(d) + '.');
+  }
+  logEvent_('trips', 'TRIP_TIME_PROPOSED', { trip_id: t.id, new_time: formatDt_(d) });
+}
+
+function handleTripTimeConfirm_(userId, chatId, tripId) {
+  const t = findTripById_(tripId);
+  if (!t || String(t.assigned_tg) !== String(userId)) { sendMessage_(chatId, '⛔ Это не ваша поездка.'); return; }
+  const offer = PropertiesService.getScriptProperties().getProperty('chgoffer_' + tripId);
+  if (!offer) { sendMessage_(chatId, 'ℹ️ Нет активного предложения о переносе.'); return; }
+  const d = new Date(parseInt(offer, 10));
+  applyNewTime_(t, d);
+  PropertiesService.getScriptProperties().deleteProperty('chgoffer_' + tripId);
+  sendMessage_(chatId, '✅ Новое время подтверждено: ' + formatDt_(d) + '\nНапоминания пересчитаются автоматически.');
+  getAdminIds_().forEach(function (a) { sendMessage_(a, '✅ Волонтёр подтвердил новое время поездки #' + tripId + ': ' + formatDt_(d)); });
+  logEvent_('trips', 'TRIP_TIME_CONFIRMED', { trip_id: tripId, user_id: userId });
+}
+
+function handleTripTimeRefuse_(userId, chatId, tripId) {
+  const t = findTripById_(tripId);
+  if (!t || String(t.assigned_tg) !== String(userId)) { sendMessage_(chatId, '⛔ Это не ваша поездка.'); return; }
+  PropertiesService.getScriptProperties().deleteProperty('chgoffer_' + tripId);
+
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+  setTripStatus_(t.row, 'Опубликована');
+  sheet.getRange(t.row, 10).setValue('');
+  sheet.getRange(t.row, 11).setValue('');
+  appendResponse_(tripId, userId, t.assigned_nick, 'отмена', 'не смогу в новое время');
+
+  sendMessage_(chatId, 'Понял вас. Поездка #' + tripId + ' освобождена, ищем нового волонтёра.');
+  const card = '⚠️ Волонтёр не может в новое время поездки #' + tripId + '!\nИщем нового волонтёра.';
+  getAdminIds_().forEach(function (a) {
+    sendMessageWithButtons_(a, card, [[
+      { text: '🔍 Найти нового волонтёра', callback_data: 'trep:' + tripId },
+      { text: '❌ Отменить поездку', callback_data: 'tcancel:' + tripId }
+    ]]);
+  });
+  logEvent_('trips', 'TRIP_TIME_REFUSED', { trip_id: tripId, user_id: userId });
+}
+
+function applyNewTime_(t, d) {
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+  sheet.getRange(t.row, 3).setValue(d);
+  sheet.getRange(t.row, 12).setValue(0); // сброс флагов напоминаний
+  sheet.getRange(t.row, 13).setValue(0);
+  const updated = {
+    trip_type: t.trip_type, route_from: t.route_from, route_to: t.route_to,
+    task: t.task, comment: t.comment, datetime: d
+  };
+  updateChannelPost_(t.row, tripCardText_(t.id, updated, '🕐 Время изменено!'));
+}
+
+// ─────────── /cancel_trip [ID] ───────────
+
+function cmdCancelTrip_(chatId, userId, arg) {
+  if (!isUserAdmin_(userId)) { sendMessage_(chatId, '⛔ Доступно только администраторам.'); return; }
+  if (!arg) {
+    sendMessage_(chatId, 'Использование: /cancel_trip [ID]\nПример: /cancel_trip 47');
+    return;
+  }
+  const id = parseInt(arg, 10);
+  const t = findTripById_(id);
+  if (!t) { sendMessage_(chatId, '❌ Поездка не найдена.'); return; }
+  sendMessageWithButtons_(chatId, '⚠️ Отменить поездку #' + id + '?\n' + tripCardText_(id, t, ''), [[
+    { text: '❌ Отменить поездку', callback_data: 'tcancel:' + id },
+    { text: '↩ Назад', callback_data: 'tnop:0' }
+  ]]);
+}
