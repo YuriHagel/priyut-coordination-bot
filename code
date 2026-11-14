@@ -46,7 +46,7 @@ function doPost(e) {
     console.log('  Совпадает:', secret === WEBHOOK_SECRET);
     // 1. Проверка секрета
     if (secret !== WEBHOOK_SECRET) {
-      logEvent_('security', 'WEBHOOK_SECRET_MISMATCH', { 
+      logEvent_('security', 'WEBHOOK_SECRET_MISMATCH', {
         received: secret,
         received_length: secret ? secret.length : 0,
         expected_length: WEBHOOK_SECRET ? WEBHOOK_SECRET.length : 0
@@ -56,7 +56,7 @@ function doPost(e) {
 
     // 2. Парсинг JSON
     const contents = JSON.parse(e.postData.contents);
-    
+
     // 3. Идемпотентность — проверка update_id
     const updateId = contents.update_id;
     if (isDuplicateUpdate_(updateId)) {
@@ -87,7 +87,9 @@ function handleMessage_(message) {
   const userId = message.from.id;
   const text = (message.text || '').trim();
 
-  logEvent_('message', 'MESSAGE_RECEIVED', { chat_id: chatId, user_id: userId, text: text });
+  // ПРИМЕЧАНИЕ: намеренно НЕ логируем каждое сообщение (MESSAGE_RECEIVED) —
+  // appendRow в hot path тормозил webhook-ответ за таймаут Telegram (~10с),
+  // вызывая retry-петлю и потерю сообщений. Значимые события логируются ниже.
 
   // Wizard регистрации
   const regSession = getRegSession_(userId);
@@ -116,7 +118,9 @@ function handleCallback_(callback) {
   const userId = callback.from.id;
   const data = callback.data || '';
 
-  logEvent_('callback', 'CALLBACK_RECEIVED', { chat_id: chatId, user_id: userId, data: data });
+  // ПРИМЕЧАНИЕ: аналогично handleMessage_ — НЕ логируем каждый callback
+  // (CALLBACK_RECEIVED) во избежание appendRow в hot path.
+
   answerCallback_(callback.id);
 
   // Ответы на кнопки в ПОСТАХ КАНАЛА приходят с chat.id канала,
@@ -207,7 +211,7 @@ function cmdHelp_(chatId) {
   /export_trips — экспорт поездок в CSV
   /delete_profile — удалить анкету
   `;
-  
+
   sendMessage_(chatId, text);
 }
 
@@ -224,7 +228,7 @@ function sendMessage_(chatId, text, parseMode = 'HTML') {
     text: text,
     parse_mode: parseMode
   };
-  
+
   return callTelegramAPI_('sendMessage', payload);
 }
 
@@ -240,7 +244,7 @@ function sendMessageWithButtons_(chatId, text, buttons, parseMode = 'HTML') {
       inline_keyboard: buttons
     })
   };
-  
+
   return callTelegramAPI_('sendMessage', payload);
 }
 
@@ -253,7 +257,7 @@ function answerCallback_(callbackId, text = '', showAlert = false) {
     text: text,
     show_alert: showAlert
   };
-  
+
   return callTelegramAPI_('answerCallbackQuery', payload);
 }
 
@@ -262,32 +266,32 @@ function answerCallback_(callbackId, text = '', showAlert = false) {
  */
 function callTelegramAPI_(method, payload) {
   const url = TELEGRAM_API + '/' + method;
-  
+
   const options = {
     method: 'POST',
     contentType: 'application/json',
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   };
-  
+
   try {
     const response = UrlFetchApp.fetch(url, options);
     const result = JSON.parse(response.getContentText());
-    
+
     if (!result.ok) {
-      logEvent_('telegram_api', 'API_ERROR', { 
-        method: method, 
+      logEvent_('telegram_api', 'API_ERROR', {
+        method: method,
         error: result.description,
-        payload: payload 
+        payload: payload
       });
     }
-    
+
     return result;
-    
+
   } catch (error) {
-    logEvent_('telegram_api', 'FETCH_EXCEPTION', { 
-      method: method, 
-      error: error.toString() 
+    logEvent_('telegram_api', 'FETCH_EXCEPTION', {
+      method: method,
+      error: error.toString()
     });
     return { ok: false, error: error.toString() };
   }
@@ -303,7 +307,7 @@ function callTelegramAPI_(method, payload) {
 function isUserAdmin_(userId) {
   const sheet = getSheet_(SHEET_NAMES.SETTINGS);
   const data = sheet.getDataRange().getValues();
-  
+
   for (let i = 0; i < data.length; i++) {
     if (String(data[i][0]) === 'admin_ids') {
       const adminIds = String(data[i][1])
@@ -313,7 +317,7 @@ function isUserAdmin_(userId) {
       return adminIds.indexOf(String(userId)) !== -1;
     }
   }
-  
+
   return false;
 }
 
@@ -358,7 +362,7 @@ function logEvent_(category, event, details = {}) {
     const updateId = details.update_id || 0;
     const chatId = details.chat_id || 0;
     const userId = details.user_id || 0;
-    
+
     sheet.appendRow([
       timestamp,
       updateId,
@@ -367,7 +371,7 @@ function logEvent_(category, event, details = {}) {
       category + '::' + event,
       JSON.stringify(details)
     ]);
-    
+
   } catch (error) {
     // Если логирование упало — пишем в консоль, но не прерываем выполнение
     console.error('Log error:', error.toString());
@@ -380,11 +384,11 @@ function logEvent_(category, event, details = {}) {
 function getSheet_(name) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(name);
-  
+
   if (!sheet) {
     throw new Error(`Лист "${name}" не найден!`);
   }
-  
+
   return sheet;
 }
 
@@ -399,37 +403,37 @@ function getSheet_(name) {
 function setupWebhook() {
   const DEPLOYMENT_ID = 'AKfycbx4FwsFBGRCgi1u3amj50uxd6uaalDqu8NuPyAMiu5xk223ANYRJgrsVXE1cF94byBP';
   const serviceUrl = `https://script.google.com/macros/s/${DEPLOYMENT_ID}/exec`;
-  
+
   const webhookUrl = `${serviceUrl}?secret=${WEBHOOK_SECRET}`;
   console.log('⏳ Устанавливаем webhook...');
   console.log('URL:', webhookUrl);
-  
+
   // Проверяем URL на корректность
   if (!webhookUrl.includes('/exec?secret=')) {
     console.error('❌ Некорректный URL! Должен содержать /exec?secret=');
     return;
   }
-  
+
   const payload = {
     url: webhookUrl,
     allowed_updates: ['message', 'callback_query'],
     drop_pending_updates: true // Сбрасываем старые 401-ошибки
   };
-  
+
   const result = callTelegramAPI_('setWebhook', payload);
-  
+
   if (result.ok) {
     console.log('✅ Webhook установлен успешно!');
     console.log('Результат:', JSON.stringify(result.result, null, 2));
-    
+
     // Ждём 3 секунды и проверяем статус
     Utilities.sleep(3000);
-    
+
     const info = callTelegramAPI_('getWebhookInfo', {});
     if (info.ok) {
       console.log('📊 Текущий статус webhook:');
       console.log(JSON.stringify(info.result, null, 2));
-      
+
       if (info.result.last_error_message) {
         console.warn('⚠️ Есть ошибка в webhook:', info.result.last_error_message);
         console.warn('Проверьте доступ развёртывания: Развернуть → Управление развёртываниями → Должно быть "Все"');
@@ -447,7 +451,7 @@ function setupWebhook() {
  */
 function getWebhookInfo() {
   const result = callTelegramAPI_('getWebhookInfo', {});
-  
+
   if (result.ok) {
     console.log('📊 Информация о webhook:');
     console.log(JSON.stringify(result.result, null, 2));
@@ -462,7 +466,7 @@ function getWebhookInfo() {
 function deleteWebhook() {
   console.log('⏳ Удаляем webhook...');
   const result = callTelegramAPI_('deleteWebhook', {drop_pending_updates: true});
-  
+
   if (result.ok) {
     console.log('✅ Webhook удалён, накопленные обновления сброшены.');
   } else {
@@ -498,14 +502,14 @@ function requestPermissions() {
  */
 function debugWebhookSecret() {
   const secret = SCRIPT_PROPS.getProperty('WEBHOOK_SECRET');
-  
+
   console.log('🔍 Диагностика WEBHOOK_SECRET:');
   console.log('Значение:', secret);
   console.log('Тип:', typeof secret);
   console.log('Длина:', secret ? secret.length : 0);
   console.log('Ожидаемое из URL: priyutino_2026_secret_xyz123');
   console.log('Длина ожидаемого: 33');
-  
+
   if (!secret) {
     console.error('❌ Свойство WEBHOOK_SECRET не задано!');
     console.error('Создайте его: ⚙️ Свойства сценария → Добавить свойство сценария');
@@ -528,6 +532,6 @@ function doGet(e) {
                    `Время сервера: ${new Date().toISOString()}\n` +
                    `Секрет в URL: ${e.parameter.secret || 'не передан'}\n` +
                    `Токен бота загружен: ${!!BOT_TOKEN}`;
-  
+
   return ContentService.createTextOutput(response).setMimeType(ContentService.MimeType.TEXT);
 }
