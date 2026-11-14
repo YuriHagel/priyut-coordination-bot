@@ -420,26 +420,4 @@ function dailyBackup() {
 function getBackupFolder_() {
   const it = DriveApp.getFoldersByName('PriyutBackups');
   return it.hasNext() ? it.next() : DriveApp.createFolder('PriyutBackups');
-}function dailyBackup() {
-  if (getSetting_('backup_enabled') !== '1') return;
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const folder = getBackupFolder_();
-  const stamp = Utilities.formatDate(new Date(), 'Europe/Moscow', 'yyyy-MM-dd_HH-mm');
-  const copy = ss.copy('BACKUP_' + ss.getName() + '_' + stamp, folder);
-
-  // Ротация: храним 7 дней
-  const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
-  const files = folder.getFiles();
-  while (files.hasNext()) {
-    const f = files.next();
-    if (f.getName().indexOf('BACKUP_') === 0 && f.getDateCreated().getTime() < cutoff) {
-      f.setTrashed(true);
-    }
-  }
-  console.log('🗄 Бэкап создан: ' + copy.getName());
-}
-
-function getBackupFolder_() {
-  const it = DriveApp.getFoldersByName('PriyutBackups');
-  return it.hasNext() ? it.next() : DriveApp.createFolder('PriyutBackups');
 }
