@@ -1,0 +1,445 @@
+/**
+ * Сервисный модуль: напоминания 24ч/2ч, /stats, /export_trips,
+ * /profile, /availability, /delete_profile, /volunteers, бэкапы.
+ * ТЗ v2: F4–F7, F10, F11, N2; сценарии Г, Ж.
+ */
+
+// ─────────── Напоминания 24ч / 2ч (сценарий Г) ───────────
+
+function setupReminderTrigger() {
+  deleteReminderTrigger();
+  ScriptApp.newTrigger('scanReminders').timeBased().everyMinutes(15).create();
+  console.log('✅ Триггер напоминаний создан (каждые 15 минут).');
+}
+
+function deleteReminderTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'scanReminders') ScriptApp.deleteTrigger(t);
+  });
+}
+
+function scanReminders() {
+  if (getSetting_('reminder_24h_enabled') !== '1' && getSetting_('reminder_2h_enabled') !== '1') return;
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+  const last = sheet.getLastRow();
+  if (last < 2) return;
+
+  const vals = sheet.getRange(2, 1, last - 1, 17).getValues();
+  const now = Date.now();
+  const H = 3600 * 1000;
+
+  for (let i = 0; i < vals.length; i++) {
+    const r = vals[i];
+    if (String(r[8]) !== 'Занята' || !r[9]) continue;
+    const dt = (r[2] instanceof Date) ? r[2].getTime() : new Date(r[2]).getTime();
+    if (isNaN(dt)) continue;
+    const left = dt - now;
+    if (left <= 0) continue; // просрочена — напоминания не шлём
+    const row = i + 2;
+    const tripId = r[0];
+    const tg = r[9];
+
+    if (getSetting_('reminder_24h_enabled') === '1' && left <= 24 * H && Number(r[11]) === 0) {
+      sheet.getRange(row, 12).setValue(1);
+      sendReminder_(tg, tripId, r, 24);
+    }
+    if (getSetting_('reminder_2h_enabled') === '1' && left <= 2 * H && Number(r[12]) === 0) {
+      sheet.getRange(row, 13).setValue(1);
+      sendReminder_(tg, tripId, r, 2);
+    }
+  }
+}
+
+function sendReminder_(tg, tripId, r, hours) {
+  const t = { trip_type: r[6], route_from: r[3], route_to: r[4], task: r[5], comment: r[7], datetime: r[2] };
+  const yes = (hours === 24 ? 'r24y:' : 'r2y:') + tripId;
+  const no  = (hours === 24 ? 'r24n:' : 'r2n:') + tripId;
+
+  let text = '⏰ НАПОМИНАНИЕ (за ' + hours + ' ч):\n' + tripCardText_(tripId, t, '');
+  const buttons = [[
+    { text: '✅ Подтверждаю', callback_data: yes },
+    { text: '❌ Не смогу', callback_data: no }
+  ]];
+
+  if (hours === 2) {
+    const adminContact = getSetting_('admin_contact') || '';
+    if (adminContact) {
+      buttons.push([{ text: '✉️ Написать админу в Telegram', url: 'https://t.me/' + String(adminContact).replace('@', '') }]);
+    }
+    text += '\nСвяжитесь с админом для уточнения деталей.';
+  } else {
+    text += '\nПодтвердите участие.';
+  }
+
+  sendMessageWithButtons_(tg, text, buttons);
+  logEvent_('reminders', 'REMINDER_SENT', { trip_id: tripId, hours: hours, user_id: tg });
+}
+
+function handleReminderAnswer_(userId, chatId, data) {
+  const parts = data.split(':');
+  const kind = parts[0];
+  const tripId = parseInt(parts[1], 10);
+  const t = findTripById_(tripId);
+  if (!t) { sendMessage_(chatId, '❌ Поездка не найдена.'); return; }
+
+  const isYes = (kind === 'r24y' || kind === 'r2y');
+  const hours = (kind === 'r24y' || kind === 'r24n') ? 24 : 2;
+
+  if (isYes) {
+    appendResponse_(tripId, userId, t.assigned_nick, 'напоминание_да', hours + 'h');
+    sendMessage_(chatId, '✅ Спасибо! Участие подтверждено.\nАдминистратор уведомлён.');
+    getAdminIds_().forEach(function (a) {
+      sendMessage_(a, '✅ ' + (t.assigned_nick || 'Волонтёр') + ' подтвердил участие в поездке #' + tripId + ' (напоминание за ' + hours + ' ч).');
+    });
+    logEvent_('reminders', 'REMINDER_CONFIRMED', { trip_id: tripId, user_id: userId, hours: hours });
+  } else {
+    if (t.status !== 'Занята') { sendMessage_(chatId, 'ℹ️ Поездка #' + tripId + ' уже закрыта.'); return; }
+    appendResponse_(tripId, userId, t.assigned_nick, 'напоминание_нет', hours + 'h');
+    applyVolunteerCancel_(userId, chatId, t, '❌ Не смогу (напоминание за ' + hours + ' ч)', 'sick');
+  }
+}
+
+// ─────────── /profile и /availability ───────────
+
+function cmdProfile_(chatId, userId) {
+  const vol = findVolunteerByTgId_(userId);
+  if (!vol) {
+    sendMessageWithButtons_(chatId, 'У вас пока нет анкеты.', [[{ text: '📝 Зарегистрироваться', callback_data: 'reg:start' }]]);
+    return;
+  }
+  const r = getSheet_(SHEET_NAMES.VOLUNTEERS).getRange(vol.row, 1, 1, 12).getValues()[0];
+  sendMessageWithButtons_(chatId,
+    '👤 Ваш профиль:\n\n' +
+    '👤 ' + r[2] + '\n🚗 ' + r[3] + '\n📍 ' + r[4] + '\n' +
+    '📅 ' + r[5] + '\n⏰ ' + r[6] + '\n🐾 ' + r[7] + '\n' +
+    (r[8] ? '💬 ' + r[8] + '\n' : '') +
+    'Статус: ' + r[9],
+    [[
+      { text: '✏️ Редактировать', callback_data: 'pedit:0' },
+      { text: '🗑 Удалить анкету', callback_data: 'pdel:0' }
+    ]]);
+}
+
+function startRegEdit_(userId, chatId) {
+  const vol = findVolunteerByTgId_(userId);
+  if (!vol) { sendMessage_(chatId, 'Нет анкеты для редактирования.'); return; }
+  const r = getSheet_(SHEET_NAMES.VOLUNTEERS).getRange(vol.row, 1, 1, 12).getValues()[0];
+  saveRegSession_(userId, {
+    mode: 'edit',
+    step: 'nickname',
+    data: {
+      nickname: r[2], car: r[3], areas: r[4],
+      days: String(r[5] || '').split(', ').filter(String),
+      availability_time: r[6],
+      animals: String(r[7] || '').split(', ').filter(String),
+      comments: r[8]
+    }
+  });
+  sendMessage_(chatId, '✏️ Редактирование профиля.\nШаг 1/7. Ник (сейчас: ' + r[2] + '):');
+}
+
+function cmdAvailability_(chatId, userId) {
+  const vol = findVolunteerByTgId_(userId);
+  if (!vol || (vol.status !== 'Одобрен' && vol.status !== 'Недоступен')) {
+    sendMessage_(chatId, 'Управление доступностью доступно после одобрения анкеты.');
+    return;
+  }
+  const paused = (vol.status === 'Недоступен');
+  sendMessageWithButtons_(chatId,
+    '📅 Ваша доступность:\n' + vol.availability_days + ', ' + vol.availability_time + '\n' +
+    'Сейчас: ' + (paused ? '⏸ Временно недоступен' : '✅ Доступен') + '\n\n' +
+    'В режиме паузы вы не получаете срочные рассылки.',
+    [[
+      { text: paused ? '✅ Доступен' : '⏸ Временно недоступен', callback_data: paused ? 'avon:0' : 'avoff:0' }
+    ], [
+      { text: '✏️ Изменить дни/часы', callback_data: 'pedit:0' }
+    ]]);
+}
+
+function handleAvailabilityToggle_(userId, chatId, on) {
+  const vol = findVolunteerByTgId_(userId);
+  if (!vol || (vol.status !== 'Одобрен' && vol.status !== 'Недоступен')) {
+    sendMessage_(chatId, '⛔ Действие недоступно.');
+    return;
+  }
+  getSheet_(SHEET_NAMES.VOLUNTEERS).getRange(vol.row, 10).setValue(on ? 'Одобрен' : 'Недоступен');
+  sendMessage_(chatId, on
+    ? '✅ Вы снова доступны! Срочные рассылки будут приходить.'
+    : '⏸ Пауза включена. Срочные рассылки приходить не будут.\nВернуться: /availability');
+  logEvent_('profile', 'AVAILABILITY_CHANGED', { user_id: userId, available: on });
+}
+
+// ─────────── /stats ───────────
+
+function cmdStats_(chatId, userId) {
+  if (isUserAdmin_(userId)) sendAdminStats_(chatId, userId);
+  else sendVolunteerStats_(chatId, userId);
+}
+
+function sendAdminStats_(chatId, userId) {
+  const vSheet = getSheet_(SHEET_NAMES.VOLUNTEERS);
+  const vLast = vSheet.getLastRow();
+  let approved = 0, moderation = 0, paused = 0;
+  if (vLast >= 2) {
+    vSheet.getRange(2, 10, vLast - 1, 1).getValues().forEach(function (r) {
+      const s = String(r[0]);
+      if (s === 'Одобрен') approved++;
+      else if (s === 'На модерации') moderation++;
+      else if (s === 'Недоступен') paused++;
+    });
+  }
+
+  const tSheet = getSheet_(SHEET_NAMES.TRIPS);
+  const tLast = tSheet.getLastRow();
+  let total = 0, completed = 0, cancelled = 0, active = 0, monthCompleted = 0;
+  const now = new Date();
+  if (tLast >= 2) {
+    tSheet.getRange(2, 1, tLast - 1, 17).getValues().forEach(function (r) {
+      total++;
+      const s = String(r[8]);
+      if (s === 'Выполнена') {
+        completed++;
+        const closed = (r[14] instanceof Date) ? r[14] : new Date(r[14]);
+        if (closed.getFullYear() === now.getFullYear() && closed.getMonth() === now.getMonth()) monthCompleted++;
+      } else if (s === 'Отменена') cancelled++;
+      else if (s !== 'Черновик') active++;
+    });
+  }
+  const rate = total ? Math.round(completed / total * 100) : 0;
+
+  sendMessage_(chatId,
+    '📊 Статистика:\n\n' +
+    '👥 Волонтёры: одобрено ' + approved + ', на модерации ' + moderation + ', на паузе ' + paused + '\n' +
+    '🚕 Поездки: всего ' + total + ', активных ' + active + '\n' +
+    '✅ Выполнено: ' + completed + ' (' + rate + '%), за текущий месяц: ' + monthCompleted + '\n' +
+    '❌ Отменено: ' + cancelled);
+  logEvent_('stats', 'ADMIN_STATS', { user_id: userId });
+}
+
+function sendVolunteerStats_(chatId, userId) {
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+  const last = sheet.getLastRow();
+  let completed = 0, active = 0;
+  if (last >= 2) {
+    sheet.getRange(2, 1, last - 1, 17).getValues().forEach(function (r) {
+      if (String(r[9]) !== String(userId)) return;
+      const s = String(r[8]);
+      if (s === 'Выполнена') completed++;
+      else if (s === 'Занята' || s === 'На проверке') active++;
+    });
+  }
+  let myCancels = 0;
+  const rSheet = getSheet_(SHEET_NAMES.RESPONSES);
+  const rLast = rSheet.getLastRow();
+  if (rLast >= 2) {
+    rSheet.getRange(2, 1, rLast - 1, 7).getValues().forEach(function (r) {
+      if (String(r[2]) === String(userId) && String(r[4]) === 'отмена') myCancels++;
+    });
+  }
+  sendMessage_(chatId,
+    '📊 Ваша статистика:\n\n' +
+    '✅ Выполнено поездок: ' + completed + '\n' +
+    '🚕 Активных сейчас: ' + active + '\n' +
+    '❌ Ваших отмен: ' + myCancels + '\n\n' +
+    'Спасибо за помощь! 🐾');
+}
+
+// ─────────── /volunteers ───────────
+
+function cmdVolunteers_(chatId, userId) {
+  if (!isUserAdmin_(userId)) { sendMessage_(chatId, '⛔ Доступно только администраторам.'); return; }
+  const sheet = getSheet_(SHEET_NAMES.VOLUNTEERS);
+  const last = sheet.getLastRow();
+  if (last < 2) { sendMessage_(chatId, '📭 База пуста.'); return; }
+  const vals = sheet.getRange(2, 1, last - 1, 12).getValues();
+  let text = '👥 Волонтёры:\n\n';
+  let n = 0;
+  vals.forEach(function (r) {
+    const s = String(r[9]);
+    if (s === 'Удалён' || s === 'Отклонён') return;
+    n++;
+    const mark = (s === 'Одобрен') ? '✅' : (s === 'На модерации' ? '⏳' : '⏸');
+    text += '• ' + mark + ' ' + r[2] + ' | ' + r[3] + ' | ' + r[4] + '\n';
+  });
+  sendMessage_(chatId, text + '\nВсего: ' + n);
+}
+
+// ─────────── /export_trips (CSV) ───────────
+
+function cmdExportTrips_(chatId, userId) {
+  if (!isUserAdmin_(userId)) { sendMessage_(chatId, '⛔ Доступно только администраторам.'); return; }
+  const sheet = getSheet_(SHEET_NAMES.TRIPS);
+  const last = sheet.getLastRow();
+  if (last < 2) { sendMessage_(chatId, '📭 Нет данных для экспорта.'); return; }
+
+  const vals = sheet.getRange(2, 1, last - 1, 17).getValues();
+  const head = ['№','Создана','Дата поездки','Откуда','Куда','Задача','Тип','Комментарий','Статус','Исполнитель','Выполнена','Закрыта','Причина отмены'];
+  const lines = [head.join(';')];
+  vals.forEach(function (r) {
+    lines.push([
+      r[0], fmtCsvDate_(r[1]), fmtCsvDate_(r[2]), csvEsc_(r[3]), csvEsc_(r[4]), csvEsc_(r[5]),
+      csvEsc_(r[6]), csvEsc_(r[7]), csvEsc_(r[8]), csvEsc_(r[10]),
+      fmtCsvDate_(r[13]), fmtCsvDate_(r[14]), csvEsc_(r[15])
+    ].join(';'));
+  });
+
+  const csv = '\ufeff' + lines.join('\r\n'); // BOM + CRLF для Excel
+  const name = 'trips_export_' + Utilities.formatDate(new Date(), 'Europe/Moscow', 'yyyy-MM-dd') + '.csv';
+  const blob = Utilities.newBlob(csv, 'text/csv', name);
+  sendDocument_(chatId, blob, '📄 Экспорт истории поездок (' + vals.length + ' строк)');
+  logEvent_('export', 'TRIPS_EXPORTED', { user_id: userId, rows: vals.length });
+}
+
+function fmtCsvDate_(v) {
+  if (!v) return '';
+  const d = (v instanceof Date) ? v : new Date(v);
+  return isNaN(d.getTime()) ? '' : Utilities.formatDate(d, 'Europe/Moscow', 'dd.MM.yyyy HH:mm');
+}
+function csvEsc_(v) {
+  const s = (v === null || v === undefined) ? '' : String(v);
+  return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function sendDocument_(chatId, blob, caption) {
+  const url = 'https://api.telegram.org/bot' + BOT_TOKEN + '/sendDocument';
+  const res = UrlFetchApp.fetch(url, {
+    method: 'post',
+    payload: { chat_id: chatId, caption: caption, document: blob },
+    muteHttpExceptions: true
+  });
+  return JSON.parse(res.getContentText());
+}
+
+// ─────────── /delete_profile (сценарий Ж, без ПДн) ───────────
+
+function cmdDeleteProfile_(chatId, userId) {
+  const vol = findVolunteerByTgId_(userId);
+  if (!vol) { sendMessage_(chatId, 'У вас нет анкеты.'); return; }
+  sendMessageWithButtons_(chatId,
+    '⚠️ Вы собираетесь удалить свою анкету из базы волонтёров.\n' +
+    'Это действие необратимо. Будут удалены:\n' +
+    '• Ник\n• Автомобиль\n• Район\n• График доступности\n• Комментарий\n\n' +
+    'История поездок будет анонимизирована.\n' +
+    'Срок удаления: немедленно (по правилам — до 3 дней).\n' +
+    'Резервные копии очищаются автоматически в течение 7 дней.\n\n' +
+    'Вы уверены?',
+    [[
+      { text: '❌ Нет, отменить', callback_data: 'pdeln:0' },
+      { text: '✅ Да, удалить', callback_data: 'pdely:0' }
+    ]]);
+}
+
+function handleDeleteProfileConfirm_(userId, chatId) {
+  const vol = findVolunteerByTgId_(userId);
+  if (!vol) { sendMessage_(chatId, 'Анкета уже удалена.'); return; }
+
+  const sheet = getSheet_(SHEET_NAMES.VOLUNTEERS);
+  // Полное стирание персональных полей (строку сохраняем для целостности истории)
+  sheet.getRange(vol.row, 2).setValue(0);
+  sheet.getRange(vol.row, 3).setValue('анкета удалена');
+  sheet.getRange(vol.row, 4).setValue('');
+  sheet.getRange(vol.row, 5).setValue('');
+  sheet.getRange(vol.row, 6).setValue('');
+  sheet.getRange(vol.row, 7).setValue('');
+  sheet.getRange(vol.row, 8).setValue('');
+  sheet.getRange(vol.row, 9).setValue('');
+  sheet.getRange(vol.row, 10).setValue('Удалён');
+
+  anonymizeHistory_(userId);
+
+  sendMessage_(chatId,
+    '✅ Ваша анкета удалена.\n' +
+    '🙏 Спасибо, что были с нами!\n' +
+    'Если захотите вернуться — просто напишите /start ещё раз.');
+  logEvent_('privacy', 'PROFILE_DELETED', { user_id: userId });
+}
+
+function anonymizeHistory_(userId) {
+  const tSheet = getSheet_(SHEET_NAMES.TRIPS);
+  const tLast = tSheet.getLastRow();
+  if (tLast >= 2) {
+    const vals = tSheet.getRange(2, 10, tLast - 1, 2).getValues();
+    for (let i = 0; i < vals.length; i++) {
+      if (String(vals[i][0]) === String(userId)) {
+        tSheet.getRange(i + 2, 10).setValue(0);
+        tSheet.getRange(i + 2, 11).setValue('волонтёр удалён');
+      }
+    }
+  }
+  const rSheet = getSheet_(SHEET_NAMES.RESPONSES);
+  const rLast = rSheet.getLastRow();
+  if (rLast >= 2) {
+    const vals = rSheet.getRange(2, 3, rLast - 1, 2).getValues();
+    for (let i = 0; i < vals.length; i++) {
+      if (String(vals[i][0]) === String(userId)) {
+        rSheet.getRange(i + 2, 3).setValue(0);
+        rSheet.getRange(i + 2, 4).setValue('волонтёр удалён');
+      }
+    }
+  }
+}
+
+function cmdWithdrawConsent_(chatId, userId) {
+  sendMessage_(chatId,
+    '📄 Бот не обрабатывает персональные данные (ФИО, телефон), поэтому согласие на обработку ПДн не оформлялось и не отзывается.\n' +
+    'Вашу анкету (ник, авто, график) можно удалить командой /delete_profile — немедленно и необратимо.');
+}
+
+// ─────────── Бэкапы (ТЗ v2, N2) ───────────
+
+function setupBackupTrigger() {
+  deleteBackupTrigger();
+  ScriptApp.newTrigger('dailyBackup').timeBased().everyDays(1).atHour(3).create();
+  console.log('✅ Ежедневный триггер бэкапов создан (03:00).');
+}
+
+function deleteBackupTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'dailyBackup') ScriptApp.deleteTrigger(t);
+  });
+}
+
+function dailyBackup() {
+  if (getSetting_('backup_enabled') !== '1') return;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const folder = getBackupFolder_();
+  const stamp = Utilities.formatDate(new Date(), 'Europe/Moscow', 'yyyy-MM-dd_HH-mm');
+  const copy = ss.copy('BACKUP_' + ss.getName() + '_' + stamp, folder);
+
+  // Ротация: храним 7 дней
+  const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+  const files = folder.getFiles();
+  while (files.hasNext()) {
+    const f = files.next();
+    if (f.getName().indexOf('BACKUP_') === 0 && f.getDateCreated().getTime() < cutoff) {
+      f.setTrashed(true);
+    }
+  }
+  console.log('🗄 Бэкап создан: ' + copy.getName());
+}
+
+function getBackupFolder_() {
+  const it = DriveApp.getFoldersByName('PriyutBackups');
+  return it.hasNext() ? it.next() : DriveApp.createFolder('PriyutBackups');
+}function dailyBackup() {
+  if (getSetting_('backup_enabled') !== '1') return;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const folder = getBackupFolder_();
+  const stamp = Utilities.formatDate(new Date(), 'Europe/Moscow', 'yyyy-MM-dd_HH-mm');
+  const copy = ss.copy('BACKUP_' + ss.getName() + '_' + stamp, folder);
+
+  // Ротация: храним 7 дней
+  const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+  const files = folder.getFiles();
+  while (files.hasNext()) {
+    const f = files.next();
+    if (f.getName().indexOf('BACKUP_') === 0 && f.getDateCreated().getTime() < cutoff) {
+      f.setTrashed(true);
+    }
+  }
+  console.log('🗄 Бэкап создан: ' + copy.getName());
+}
+
+function getBackupFolder_() {
+  const it = DriveApp.getFoldersByName('PriyutBackups');
+  return it.hasNext() ? it.next() : DriveApp.createFolder('PriyutBackups');
+}
