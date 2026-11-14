@@ -107,6 +107,18 @@ function handleMessage_(message) {
     return;
   }
 
+  // Причина отмены свободным текстом (волонтёр)
+  if (getCnlSession_(userId) && text !== '' && text.charAt(0) !== '/') {
+    processCancelReasonText_(userId, chatId, text);
+    return;
+  }  
+
+  // Новое время поездки (админ)
+  if (getChgSession_(userId) && text !== '' && text.charAt(0) !== '/') {
+    processChangeTimeText_(userId, chatId, text);
+    return;
+  }
+
   if (text.charAt(0) === '/') {
     const command = text.split(' ')[0].split('@')[0];
     handleCommand_(command, message);
@@ -116,7 +128,6 @@ function handleMessage_(message) {
 }
 
 function handleCallback_(callback) {
-  const chatId = callback.message.chat.id;
   const userId = callback.from.id;
   const data = callback.data || '';
 
@@ -124,6 +135,7 @@ function handleCallback_(callback) {
   // (CALLBACK_RECEIVED) во избежание appendRow в hot path.
 
   answerCallback_(callback.id);
+  const id = function () { return parseInt(data.split(':')[1], 10); };
 
   // Ответы на кнопки в ПОСТАХ КАНАЛА приходят с chat.id канала,
   // поэтому отвечаем всегда в личный чат пользователя (userId).
@@ -137,6 +149,47 @@ function handleCallback_(callback) {
     handleTripResponse_(userId, userId, data);
   } else if (data.indexOf('tappr:') === 0 || data.indexOf('trej:') === 0) {
     handleTripModeration_(userId, userId, data);
+  } else if (data.indexOf('tcnlr:') === 0) {
+    handleTripCancelReason_(userId, userId, data.split(':'));
+  } else if (data.indexOf('tcnl:') === 0) {
+    handleTripCancelStart_(userId, userId, id());
+  } else if (data.indexOf('tdone:') === 0) {
+    handleTripDone_(userId, userId, id());
+  } else if (data.indexOf('tclose:') === 0) {
+    handleTripClose_(userId, userId, id());
+  } else if (data.indexOf('trework:') === 0) {
+    handleTripRework_(userId, userId, id());
+  } else if (data.indexOf('trep:') === 0) {
+    handleTripRepublish_(userId, userId, id());
+  } else if (data.indexOf('tcancel:') === 0) {
+    handleTripFullCancel_(userId, userId, id());
+  } else if (data.indexOf('tchg:') === 0) {
+    handleTripChangeTimeStart_(userId, userId, id());
+  } else if (data.indexOf('tconf:') === 0) {
+    handleTripTimeConfirm_(userId, userId, id());
+  } else if (data.indexOf('tref:') === 0) {
+    handleTripTimeRefuse_(userId, userId, id());
+  } else if (
+    data.indexOf('r24y:') === 0 ||
+    data.indexOf('r24n:') === 0 ||
+    data.indexOf('r2y:') === 0 ||
+    data.indexOf('r2n:') === 0
+  ) {
+    handleReminderAnswer_(userId, userId, data);
+  } else if (data === 'pedit:0') {
+    startRegEdit_(userId, userId);
+  } else if (data === 'pdel:0') {
+    cmdDeleteProfile_(userId, userId);
+  } else if (data === 'pdely:0') {
+    handleDeleteProfileConfirm_(userId, userId);
+  } else if (data === 'pdeln:0') {
+    sendMessage_(userId, '↩ Удаление отменено.');
+  } else if (data === 'avon:0') {
+    handleAvailabilityToggle_(userId, userId, true);
+  } else if (data === 'avoff:0') {
+    handleAvailabilityToggle_(userId, userId, false);
+  } else if (data.indexOf('tnop:') === 0) {
+    sendMessage_(userId, data === 'tnop:0' ? '↩ Действие отменено.' : 'ℹ️ Поездка на проверке у администратора.');
   } else {
     sendMessage_(userId, 'Неизвестная кнопка: ' + data);
   }
@@ -145,6 +198,7 @@ function handleCallback_(callback) {
 function handleCommand_(command, message) {
   const chatId = message.chat.id;
   const userId = message.from.id;
+  const arg = (message.text || '').trim().split(' ').slice(1).join(' ').trim();
 
   switch (command) {
     case '/start': cmdStart_(chatId, userId); break;
@@ -153,6 +207,17 @@ function handleCommand_(command, message) {
     case '/new_trip': cmdNewTrip_(chatId, userId); break;
     case '/trips': cmdTrips_(chatId, userId); break;
     case '/open_trips': cmdOpenTrips_(chatId, userId); break;
+    case '/my_trips': cmdMyTrips_(chatId, userId); break;
+    case '/change_time': cmdChangeTime_(chatId, userId, arg); break;
+    case '/cancel_trip': cmdCancelTrip_(chatId, userId, arg); break;
+    case '/profile': cmdProfile_(chatId, userId); break;
+    case '/availability': cmdAvailability_(chatId, userId); break;
+    case '/stats': cmdStats_(chatId, userId); break;
+    case '/volunteers': cmdVolunteers_(chatId, userId); break;
+    case '/export_trips': cmdExportTrips_(chatId, userId); break;
+    case '/delete_profile': cmdDeleteProfile_(chatId, userId); break;
+    case '/withdraw_consent': cmdWithdrawConsent_(chatId, userId); break;
+    case '/version': sendMessage_(chatId, '🛠 Сборка: ' + BUILD); break;
     default:
       sendMessage_(chatId, '❓ Неизвестная команда: ' + command + '\n\nНапишите /help для списка команд.');
   }
@@ -193,28 +258,25 @@ function cmdStart_(chatId, userId) {
  * /help — справка по командам
  */
 function cmdHelp_(chatId) {
-  const text = `
-📖 Справка по командам
-
-👤 Для волонтёров:
-  /start — начать работу
-  /register — зарегистрироваться
-  /my_trips — мои активные поездки
-  /profile — просмотр/правка профиля
-  /help — эта справка
-
-🔑 Для администраторов:
-  /new_trip — создать новую поездку
-  /trips — список активных поездок
-  /volunteers — список волонтёров
-  /stats — статистика
-
-🔧 В разработке:
-  /export_trips — экспорт поездок в CSV
-  /delete_profile — удалить анкету
-  `;
-
-  sendMessage_(chatId, text);
+  sendMessage_(chatId,
+    '📖 Команды:\n\n' +
+    '👤 Волонтёр:\n' +
+    '/start — начало работы\n' +
+    '/open_trips — открытые заявки\n' +
+    '/my_trips — мои поездки\n' +
+    '/profile — мой профиль\n' +
+    '/availability — режим доступности\n' +
+    '/stats — моя статистика\n' +
+    '/delete_profile — удалить анкету\n\n' +
+    '🔑 Админ:\n' +
+    '/new_trip — создать поездку\n' +
+    '/trips — активные поездки\n' +
+    '/volunteers — список волонтёров\n' +
+    '/change_time [ID] — перенос времени\n' +
+    '/cancel_trip [ID] — отмена поездки\n' +
+    '/stats — статистика\n' +
+    '/export_trips — экспорт CSV\n\n' +
+    '🛠 /version — сборка');
 }
 
 // ═══════════════════════════════════════════════════════════════
