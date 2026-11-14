@@ -440,7 +440,11 @@ function parseTripDateTime_(text) {
   const hh = +m[4], mm = +m[5];
   if (month < 1 || month > 12 || day < 1 || day > 31 || hh > 23 || mm > 59) return null;
   const d = new Date(year, month - 1, day, hh, mm, 0, 0);
-  return isNaN(d.getTime()) ? null : d;
+  if (isNaN(d.getTime())) return null;
+  // JS «роллит» несуществующие даты (31.04 → 01.05, 29.02 невисокосного → 01.03).
+  // Проверяем, что компоненты не изменились после нормализации.
+  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) return null;
+  return d;
 }
 
 function formatDt_(d) {
