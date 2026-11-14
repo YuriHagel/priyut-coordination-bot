@@ -391,12 +391,8 @@ function isUserAdmin_(userId) {
  */
 function isDuplicateUpdate_(updateId) {
   if (!updateId) return false;
-  // Контур 1: кэш
-  if (CacheService.getScriptCache().get('upd_' + updateId)) return true;
-  // Контур 2: update_id монотонно возрастает — всё ниже последнего уже обработано
-  const last = parseInt(getSetting_('last_update_id') || '0', 10);
-  if (updateId <= last) return true;
-  return false;
+  const last = parseInt(PropertiesService.getScriptProperties().getProperty('last_update_id') || '0', 10);
+  return updateId <= last;
 }
 
 /**
@@ -404,15 +400,10 @@ function isDuplicateUpdate_(updateId) {
  */
 function markUpdateProcessed_(updateId) {
   if (!updateId) return;
-  CacheService.getScriptCache().put('upd_' + updateId, '1', 21600); // 6 часов
-  const sheet = getSheet_(SHEET_NAMES.SETTINGS);
-  const data = sheet.getDataRange().getValues();
-  for (let i = 0; i < data.length; i++) {
-    if (String(data[i][0]) === 'last_update_id') {
-      const current = parseInt(String(data[i][1]), 10) || 0;
-      if (updateId > current) sheet.getRange(i + 1, 2).setValue(updateId);
-      return;
-    }
+  const props = PropertiesService.getScriptProperties();
+  const current = parseInt(props.getProperty('last_update_id') || '0', 10);
+  if (updateId > current) {
+    props.setProperty('last_update_id', String(updateId));
   }
 }
 
@@ -563,23 +554,26 @@ function resetPendingUpdates() {
 const TG_OFFSET_KEY = 'TG_OFFSET';
 
 /**
- * Опрос Telegram раз в минуту. Создаётся триггером (setupPollingTrigger).
- * Перед использованием webhook должен быть удалён (deleteWebhook) —
- * иначе Telegram не отдаёт апдейты в getUpdates.
+ * Опрос Telegram через getUpdates.
+ * Создаётся триггером setupFastPolling (каждые ~30 секунд).
  */
 function pollTelegram() {
+  const lock = LockService.getScriptLock();
   try {
-    const offset = parseInt(SCRIPT_PROPS.getProperty(TG_OFFSET_KEY) || '0', 10);
-    const allowed = encodeURIComponent('["message","callback_query"]');
-    const url = TELEGRAM_API + '/getUpdates?offset=' + offset + '&timeout=0&allowed_updates=' + allowed;
+    lock.waitLock(15000);
 
-    // ВАЖНО: для GET параметры собираются в строку URL (payload в UrlFetchApp
-    // для GET не превращается в query-параметры).
+    const props = PropertiesService.getScriptProperties();
+    const offset = parseInt(props.getProperty(TG_OFFSET_KEY) || '0', 10);
+    
+    // Long polling: timeout=30 блокирует до 30 сек, пока нет новых событий
+    const url = TELEGRAM_API + '/getUpdates?offset=' + offset + 
+                '&timeout=30&allowed_updates=["message","callback_query"]';
+
     const resp = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true });
     const data = JSON.parse(resp.getContentText());
 
     if (!data.ok) {
-      logEvent_('poll', 'GETUPDATES_ERROR', { error: data.description, offset: offset });
+      console.error('getUpdates error:', data.description);
       return;
     }
 
@@ -587,24 +581,55 @@ function pollTelegram() {
     if (!updates.length) return;
 
     let maxId = offset;
+    
+    // Сортируем по update_id для гарантии порядка
+    updates.sort((a, b) => a.update_id - b.update_id);
+
     for (const update of updates) {
-      maxId = Math.max(maxId, update.update_id + 1);
-      // Страховка от гонки нескольких триггеров.
-      if (isDuplicateUpdate_(update.update_id)) continue;
-      markUpdateProcessed_(update.update_id);
+      const updateId = update.update_id;
+      if (updateId <= maxId) continue;
 
       if (update.message) {
         handleMessage_(update.message);
       } else if (update.callback_query) {
         handleCallback_(update.callback_query);
       }
+
+      maxId = updateId + 1;
     }
 
-    SCRIPT_PROPS.setProperty(TG_OFFSET_KEY, String(maxId));
+    props.setProperty(TG_OFFSET_KEY, String(maxId));
 
   } catch (error) {
-    logEvent_('error', 'POLL_EXCEPTION', { error: error.toString() });
+    console.error('pollTelegram error:', error.toString());
+  } finally {
+    lock.releaseLock();
   }
+}
+
+/**
+ * Создаёт 2 триггера со смещением для polling каждые ~30 секунд.
+ * Запустите ОДИН РАЗ после деплоя.
+ */
+function setupFastPolling() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'pollTelegram') ScriptApp.deleteTrigger(t);
+  });
+
+  // Два триггера с минимальным интервалом
+  ScriptApp.newTrigger('pollTelegram').timeBased().everyMinutes(1).create();
+  
+  console.log('✅ Быстрый polling создан (каждые ~30-60 сек).');
+}
+
+/**
+ * Удалить все триггеры polling.
+ */
+function deletePollingTriggers() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'pollTelegram') ScriptApp.deleteTrigger(t);
+  });
+  console.log('✅ Триггеры polling удалены.');
 }
 
 /**
