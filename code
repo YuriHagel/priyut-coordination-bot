@@ -60,7 +60,9 @@ function doPost(e) {
     // 3. Идемпотентность — проверка update_id
     const updateId = contents.update_id;
     if (isDuplicateUpdate_(updateId)) {
-      logEvent_('webhook', 'DUPLICATE_UPDATE_IGNORED', { update_id: updateId });
+      // ПРИМЕЧАНИЕ: НЕ логируем дубликаты — appendRow здесь поддерживал retry-петлю:
+      // каждый retry застрявшего update_id вызывал медленную запись в Sheets, из-за чего
+      // ответ не укладывался в таймаут Telegram (~10с) и Telegram пересылал снова.
       return ContentService.createTextOutput('OK').setMimeType(ContentService.MimeType.TEXT);
     }
     markUpdateProcessed_(updateId);
