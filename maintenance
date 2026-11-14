@@ -1,0 +1,88 @@
+/**
+ * Модуль обслуживания: очистка листа «Журнал».
+ * Политика по ТЗ v2: хранение 90 дней + страховочный лимит строк.
+ */
+
+const JOURNAL_RETENTION_DAYS = 90;  // срок хранения журнала (ТЗ v2)
+const JOURNAL_MAX_ROWS = 500;       // страховка: максимум строк после очистки
+
+/**
+ * Основная очистка: удаляет записи старше 90 дней
+ * и ограничивает журнал последними JOURNAL_MAX_ROWS строками.
+ * Заголовки и форматирование сохраняются.
+ */
+function cleanJournal() {
+  const sheet = getSheet_(SHEET_NAMES.LOG);
+  const last = sheet.getLastRow();
+  if (last < 2) {
+    console.log('ℹ️ Журнал пуст — чистить нечего.');
+    return;
+  }
+
+  const cols = Math.max(6, sheet.getLastColumn());
+  const rows = sheet.getRange(2, 1, last - 1, cols).getValues();
+  const cutoff = new Date(Date.now() - JOURNAL_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+
+  // Оставляем только записи не старше cutoff
+  let kept = rows.filter(function (r) {
+    const d = (r[0] instanceof Date) ? r[0] : new Date(r[0]);
+    return !isNaN(d.getTime()) && d >= cutoff;
+  });
+
+  // Страховка от разрастания: держим не больше JOURNAL_MAX_ROWS последних строк
+  if (kept.length > JOURNAL_MAX_ROWS) {
+    kept = kept.slice(kept.length - JOURNAL_MAX_ROWS);
+  }
+
+  const deleted = rows.length - kept.length;
+
+  // Перезаписываем лист одним блоком (быстро, без построчного удаления)
+  sheet.getRange(2, 1, last - 1, cols).clearContent();
+  if (kept.length > 0) {
+    sheet.getRange(2, 1, kept.length, cols).setValues(kept);
+  }
+
+  console.log('🧹 Журнал очищен: удалено строк — ' + deleted + ', оставлено — ' + kept.length + '.');
+  logEvent_('maintenance', 'JOURNAL_CLEANED', { deleted: deleted, kept: kept.length });
+}
+
+/**
+ * Полная очистка журнала (заголовки сохраняются).
+ * Внимание: удаляет всю историю аудита — используйте осознанно.
+ */
+function cleanJournalAll() {
+  const sheet = getSheet_(SHEET_NAMES.LOG);
+  const last = sheet.getLastRow();
+  if (last < 2) {
+    console.log('ℹ️ Журнал уже пуст.');
+    return;
+  }
+  sheet.getRange(2, 1, last - 1, sheet.getLastColumn()).clearContent();
+  console.log('🧹 Журнал полностью очищен. Удалено строк: ' + (last - 1));
+}
+
+/**
+ * Ежедневный триггер автоочистки (04:00–05:00).
+ * Запустить ОДИН РАЗ.
+ */
+function setupJournalCleanupTrigger() {
+  deleteJournalCleanupTrigger(); // защита от дублей триггеров
+  ScriptApp.newTrigger('cleanJournal')
+    .timeBased()
+    .everyDays(1)
+    .atHour(4)
+    .create();
+  console.log('✅ Создан ежедневный триггер очистки журнала (около 04:00).');
+}
+
+/**
+ * Удалить триггер автоочистки (если понадобится отключить).
+ */
+function deleteJournalCleanupTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'cleanJournal') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+  console.log('Триггеры cleanJournal удалены (если были).');
+}
