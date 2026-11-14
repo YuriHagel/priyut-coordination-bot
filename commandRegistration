@@ -242,9 +242,29 @@ function sendConfirmStep_(chatId, session) {
 // ─────────── Завершение: запись в таблицу + модерация ───────────
 
 function finishRegistration_(userId, chatId, session) {
-  const sheet = getSheet_(SHEET_NAMES.VOLUNTEERS);
   const d = session.data;
   const now = new Date();
+
+  // Режим редактирования профиля
+  if (session.mode === 'edit') {
+    const vol = findVolunteerByTgId_(userId);
+    if (!vol) { sendMessage_(chatId, '❌ Профиль не найден.'); return; }
+    const sheet = getSheet_(SHEET_NAMES.VOLUNTEERS);
+    sheet.getRange(vol.row, 3).setValue(d.nickname);
+    sheet.getRange(vol.row, 4).setValue(d.car);
+    sheet.getRange(vol.row, 5).setValue(d.areas);
+    sheet.getRange(vol.row, 6).setValue((d.days || []).join(', '));
+    sheet.getRange(vol.row, 7).setValue(d.availability_time);
+    sheet.getRange(vol.row, 8).setValue((d.animals || []).join(', '));
+    sheet.getRange(vol.row, 9).setValue(d.comments || '');
+    clearRegSession_(userId);
+    sendMessage_(chatId, '✅ Профиль обновлён!');
+    logEvent_('profile', 'PROFILE_UPDATED', { user_id: userId });
+    return;
+  }
+
+  // Обычная регистрация
+  const sheet = getSheet_(SHEET_NAMES.VOLUNTEERS);
   const newRow = sheet.getLastRow() + 1;
   const volunteerId = newRow - 1;
 
@@ -255,7 +275,6 @@ function finishRegistration_(userId, chatId, session) {
     'На модерации', now, ''
   ]);
 
-  // Фиксация принятия Правил бота (ТЗ v2, F14)
   const resp = getSheet_(SHEET_NAMES.RESPONSES);
   resp.appendRow([
     resp.getLastRow(), 0, userId, d.nickname, 'регистрация',
@@ -269,9 +288,7 @@ function finishRegistration_(userId, chatId, session) {
 
   const card =
     '🆕 Новая анкета волонтёра!\n\n' +
-    '👤 ' + d.nickname + '\n' +
-    '🚗 ' + d.car + '\n' +
-    '📍 ' + d.areas + '\n' +
+    '👤 ' + d.nickname + '\n🚗 ' + d.car + '\n📍 ' + d.areas + '\n' +
     '📅 ' + (d.days || []).join(', ') + ', ' + d.availability_time + '\n' +
     '🐾 ' + (d.animals || []).join(', ') + '\n' +
     (d.comments ? '💬 ' + d.comments + '\n' : '');
