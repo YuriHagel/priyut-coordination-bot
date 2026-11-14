@@ -1,5 +1,5 @@
 /**
- * Ядро бота «Приют» — приём webhook, роутинг, отправка сообщений.
+ * Ядро бота «Приют» — polling (getUpdates), роутинг, отправка сообщений.
  * Версия: 1.0
  * Дата: 31.10.2026
  */
@@ -10,7 +10,6 @@
 
 const SCRIPT_PROPS = PropertiesService.getScriptProperties();
 const BOT_TOKEN = SCRIPT_PROPS.getProperty('BOT_TOKEN');
-const WEBHOOK_SECRET = SCRIPT_PROPS.getProperty('WEBHOOK_SECRET');
 
 if (!BOT_TOKEN) {
   throw new Error('BOT_TOKEN не задан в Script Properties!');
@@ -29,60 +28,8 @@ const SHEET_NAMES = {
 };
 
 // ═══════════════════════════════════════════════════════════════
-// WEBHOOK ENDPOINT (doPost)
+// РОУТИНГ СООБЩЕНИЙ И КНОПОК
 // ═══════════════════════════════════════════════════════════════
-
-/**
- * Главная точка входа — принимает POST-запросы от Telegram.
- * URL: https://script.google.com/macros/s/XXXXX/exec?secret=priyutino_2026_secret_xyz123
- */
-function doPost(e) {
-  try {
-
-    const secret = e.parameter.secret;
-    console.log('🔐 Проверка секрета:');
-    console.log('  Получено из URL:', JSON.stringify(secret));
-    console.log('  Ожидаемое (WEBHOOK_SECRET):', JSON.stringify(WEBHOOK_SECRET));
-    console.log('  Совпадает:', secret === WEBHOOK_SECRET);
-    // 1. Проверка секрета
-    if (secret !== WEBHOOK_SECRET) {
-      logEvent_('security', 'WEBHOOK_SECRET_MISMATCH', {
-        received: secret,
-        received_length: secret ? secret.length : 0,
-        expected_length: WEBHOOK_SECRET ? WEBHOOK_SECRET.length : 0
-      });
-      return ContentService.createTextOutput('Unauthorized').setMimeType(ContentService.MimeType.TEXT);
-    }
-
-    // 2. Парсинг JSON
-    const contents = JSON.parse(e.postData.contents);
-
-    // 3. Идемпотентность — проверка update_id
-    const updateId = contents.update_id;
-    if (isDuplicateUpdate_(updateId)) {
-      // ПРИМЕЧАНИЕ: НЕ логируем дубликаты — appendRow здесь поддерживал retry-петлю:
-      // каждый retry застрявшего update_id вызывал медленную запись в Sheets, из-за чего
-      // ответ не укладывался в таймаут Telegram (~10с) и Telegram пересылал снова.
-      return ContentService.createTextOutput('OK').setMimeType(ContentService.MimeType.TEXT);
-    }
-    markUpdateProcessed_(updateId);
-
-    // 4. Маршрутизация
-    if (contents.message) {
-      handleMessage_(contents.message);
-    } else if (contents.callback_query) {
-      handleCallback_(contents.callback_query);
-    } else {
-      logEvent_('webhook', 'UNKNOWN_UPDATE_TYPE', { contents: contents });
-    }
-
-    return ContentService.createTextOutput('OK').setMimeType(ContentService.MimeType.TEXT);
-
-  } catch (error) {
-    logEvent_('error', 'DO_POST_EXCEPTION', { error: error.toString(), stack: error.stack });
-    return ContentService.createTextOutput('Error').setMimeType(ContentService.MimeType.TEXT);
-  }
-}
 
 function handleMessage_(message) {
   const chatId = message.chat.id;
@@ -448,100 +395,6 @@ function getSheet_(name) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// УСТАНОВКА WEBHOOK (без UI, универсальная)
-// ═══════════════════════════════════════════════════════════════
-
-/**
- * Установить webhook автоматически через Telegram API.
- * Результат смотрите в Журнале выполнения (Execution log) внизу редактора.
- */
-function setupWebhook() {
-  const DEPLOYMENT_ID = 'AKfycbx4FwsFBGRCgi1u3amj50uxd6uaalDqu8NuPyAMiu5xk223ANYRJgrsVXE1cF94byBP';
-  const serviceUrl = `https://script.google.com/macros/s/${DEPLOYMENT_ID}/exec`;
-
-  const webhookUrl = `${serviceUrl}?secret=${WEBHOOK_SECRET}`;
-  console.log('⏳ Устанавливаем webhook...');
-  console.log('URL:', webhookUrl);
-
-  // Проверяем URL на корректность
-  if (!webhookUrl.includes('/exec?secret=')) {
-    console.error('❌ Некорректный URL! Должен содержать /exec?secret=');
-    return;
-  }
-
-  const payload = {
-    url: webhookUrl,
-    allowed_updates: ['message', 'callback_query'],
-    drop_pending_updates: true // Сбрасываем старые 401-ошибки
-  };
-
-  const result = callTelegramAPI_('setWebhook', payload);
-
-  if (result.ok) {
-    console.log('✅ Webhook установлен успешно!');
-    console.log('Результат:', JSON.stringify(result.result, null, 2));
-
-    // Ждём 3 секунды и проверяем статус
-    Utilities.sleep(3000);
-
-    const info = callTelegramAPI_('getWebhookInfo', {});
-    if (info.ok) {
-      console.log('📊 Текущий статус webhook:');
-      console.log(JSON.stringify(info.result, null, 2));
-
-      if (info.result.last_error_message) {
-        console.warn('⚠️ Есть ошибка в webhook:', info.result.last_error_message);
-        console.warn('Проверьте доступ развёртывания: Развернуть → Управление развёртываниями → Должно быть "Все"');
-      } else {
-        console.log('🎉 Webhook работает без ошибок!');
-      }
-    }
-  } else {
-    console.error('❌ Ошибка установки webhook:', result.description);
-  }
-}
-
-/**
- * Получить информацию о текущем webhook
- */
-function getWebhookInfo() {
-  const result = callTelegramAPI_('getWebhookInfo', {});
-
-  if (result.ok) {
-    console.log('📊 Информация о webhook:');
-    console.log(JSON.stringify(result.result, null, 2));
-  } else {
-    console.error('❌ Ошибка getWebhookInfo:', result.description);
-  }
-}
-
-/**
- * Удалить webhook (для отладки)
- */
-function deleteWebhook() {
-  console.log('⏳ Удаляем webhook...');
-  const result = callTelegramAPI_('deleteWebhook', {drop_pending_updates: true});
-
-  if (result.ok) {
-    console.log('✅ Webhook удалён, накопленные обновления сброшены.');
-  } else {
-    console.error('❌ Ошибка удаления:', result.description);
-  }
-}
-
-/**
- * Сбросить накопившиеся обновления (если бот "захлебнулся")
- */
-function resetPendingUpdates() {
-  const result = callTelegramAPI_('deleteWebhook', {drop_pending_updates: true});
-  if (result.ok) {
-    console.log('✅ Накопленные обновления сброшены. Переустановите webhook через setupWebhook.');
-  } else {
-    console.error('❌ Ошибка:', result.description);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════
 // POLLING (getUpdates) — вместо webhook
 // ═══════════════════════════════════════════════════════════════
 //
@@ -564,9 +417,9 @@ function pollTelegram() {
 
     const props = PropertiesService.getScriptProperties();
     const offset = parseInt(props.getProperty(TG_OFFSET_KEY) || '0', 10);
-    
+
     // Long polling: timeout=30 блокирует до 30 сек, пока нет новых событий
-    const url = TELEGRAM_API + '/getUpdates?offset=' + offset + 
+    const url = TELEGRAM_API + '/getUpdates?offset=' + offset +
                 '&timeout=30&allowed_updates=["message","callback_query"]';
 
     const resp = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true });
@@ -581,7 +434,7 @@ function pollTelegram() {
     if (!updates.length) return;
 
     let maxId = offset;
-    
+
     // Сортируем по update_id для гарантии порядка
     updates.sort((a, b) => a.update_id - b.update_id);
 
@@ -618,7 +471,7 @@ function setupFastPolling() {
 
   // Два триггера с минимальным интервалом
   ScriptApp.newTrigger('pollTelegram').timeBased().everyMinutes(1).create();
-  
+
   console.log('✅ Быстрый polling создан (каждые ~30-60 сек).');
 }
 
@@ -634,7 +487,7 @@ function deletePollingTriggers() {
 
 /**
  * Создаёт триггер опроса (раз в минуту). Запустите ОДИН РАЗ вручную.
- * Перед этим удалите webhook: deleteWebhook().
+ * Убедитесь, что webhook не установлен (иначе getUpdates не отдаёт апдейты).
  */
 function setupPollingTrigger() {
   ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
@@ -649,45 +502,5 @@ function setupPollingTrigger() {
 function requestPermissions() {
   // Простой запрос к Google, чтобы появилось окно авторизации
   UrlFetchApp.fetch('https://www.google.com');
-  console.log('✅ Разрешения получены! Теперь запустите setupWebhook.');
-}
-
-/**
- * Диагностика: показывает текущее значение WEBHOOK_SECRET.
- * Запустите, чтобы убедиться, что свойство задано правильно.
- */
-function debugWebhookSecret() {
-  const secret = SCRIPT_PROPS.getProperty('WEBHOOK_SECRET');
-
-  console.log('🔍 Диагностика WEBHOOK_SECRET:');
-  console.log('Значение:', secret);
-  console.log('Тип:', typeof secret);
-  console.log('Длина:', secret ? secret.length : 0);
-  console.log('Ожидаемое из URL: priyutino_2026_secret_xyz123');
-  console.log('Длина ожидаемого: 33');
-
-  if (!secret) {
-    console.error('❌ Свойство WEBHOOK_SECRET не задано!');
-    console.error('Создайте его: ⚙️ Свойства сценария → Добавить свойство сценария');
-  } else if (secret === 'priyutino_2026_secret_xyz123') {
-    console.log('✅ Значение совпадает с URL!');
-  } else {
-    console.error('❌ Значение НЕ совпадает!');
-    console.error('Получено:', JSON.stringify(secret));
-    console.error('Ожидалось: "priyutino_2026_secret_xyz123"');
-    console.error('Проверьте Script Properties на пробелы и регистр.');
-  }
-}
-
-/**
- * Тестовый GET-запрос для проверки доступности URL.
- * Откройте URL вашего веб-приложения в браузере, чтобы увидеть этот текст.
- */
-function doGet(e) {
-  const response = `✅ Бот Приютино работает!\n\n` +
-                   `Время сервера: ${new Date().toISOString()}\n` +
-                   `Секрет в URL: ${e.parameter.secret || 'не передан'}\n` +
-                   `Токен бота загружен: ${!!BOT_TOKEN}`;
-
-  return ContentService.createTextOutput(response).setMimeType(ContentService.MimeType.TEXT);
+  console.log('✅ Разрешения получены! Теперь запустите setupFastPolling.');
 }
