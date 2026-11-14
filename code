@@ -111,7 +111,7 @@ function handleMessage_(message) {
   if (getCnlSession_(userId) && text !== '' && text.charAt(0) !== '/') {
     processCancelReasonText_(userId, chatId, text);
     return;
-  }  
+  }
 
   // Новое время поездки (админ)
   if (getChgSession_(userId) && text !== '' && text.charAt(0) !== '/') {
@@ -548,6 +548,73 @@ function resetPendingUpdates() {
   } else {
     console.error('❌ Ошибка:', result.description);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// POLLING (getUpdates) — вместо webhook
+// ═══════════════════════════════════════════════════════════════
+//
+// Google Apps Script не даёт надёжного 200 для неаутентифицированного
+// webhook-вызова (Telegram): web app отвечает 302-редиректом, который
+// Telegram не обрабатывает. Поэтому бот сам опрашивает Telegram через
+// getUpdates раз в минуту (time-based trigger). Исходящие запросы через
+// UrlFetchApp при этом работают надёжно.
+
+const TG_OFFSET_KEY = 'TG_OFFSET';
+
+/**
+ * Опрос Telegram раз в минуту. Создаётся триггером (setupPollingTrigger).
+ * Перед использованием webhook должен быть удалён (deleteWebhook) —
+ * иначе Telegram не отдаёт апдейты в getUpdates.
+ */
+function pollTelegram() {
+  try {
+    const offset = parseInt(SCRIPT_PROPS.getProperty(TG_OFFSET_KEY) || '0', 10);
+    const allowed = encodeURIComponent('["message","callback_query"]');
+    const url = TELEGRAM_API + '/getUpdates?offset=' + offset + '&timeout=0&allowed_updates=' + allowed;
+
+    // ВАЖНО: для GET параметры собираются в строку URL (payload в UrlFetchApp
+    // для GET не превращается в query-параметры).
+    const resp = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true });
+    const data = JSON.parse(resp.getContentText());
+
+    if (!data.ok) {
+      logEvent_('poll', 'GETUPDATES_ERROR', { error: data.description, offset: offset });
+      return;
+    }
+
+    const updates = data.result || [];
+    if (!updates.length) return;
+
+    let maxId = offset;
+    for (const update of updates) {
+      maxId = Math.max(maxId, update.update_id + 1);
+      // Страховка от гонки нескольких триггеров.
+      if (isDuplicateUpdate_(update.update_id)) continue;
+      markUpdateProcessed_(update.update_id);
+
+      if (update.message) {
+        handleMessage_(update.message);
+      } else if (update.callback_query) {
+        handleCallback_(update.callback_query);
+      }
+    }
+
+    SCRIPT_PROPS.setProperty(TG_OFFSET_KEY, String(maxId));
+
+  } catch (error) {
+    logEvent_('error', 'POLL_EXCEPTION', { error: error.toString() });
+  }
+}
+
+/**
+ * Создаёт триггер опроса (раз в минуту). Запустите ОДИН РАЗ вручную.
+ * Перед этим удалите webhook: deleteWebhook().
+ */
+function setupPollingTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
+  ScriptApp.newTrigger('pollTelegram').timeBased().everyMinutes(1).create();
+  console.log('✅ Триггер pollTelegram создан (каждую минуту).');
 }
 
 /**
