@@ -1,0 +1,392 @@
+/**
+ * Модуль регистрации волонтёра (wizard без ПДн) и модерации.
+ * ТЗ v2: разд. 6.1, 3 (минимизация ПДн), 6.2 (модерация).
+ */
+
+const REG_AREAS = ['Центральный', 'Московский', 'Всеволожский'];
+const REG_DAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const REG_TIMES = [
+  { key: 'morning', label: '🌅 Утро (09:00–13:00)' },
+  { key: 'day',     label: '🌞 День (13:00–18:00)' },
+  { key: 'evening', label: '🌆 Вечер (18:00–22:00)' }
+];
+const REG_ANIMALS = ['🐱 Кошек', '🐶 Собак', '🐴 Лошадей'];
+
+// ─────────── Сессии wizard (CacheService, TTL 1 час) ───────────
+
+function getRegSession_(userId) {
+  const raw = CacheService.getScriptCache().get('reg_' + userId);
+  return raw ? JSON.parse(raw) : null;
+}
+function saveRegSession_(userId, session) {
+  CacheService.getScriptCache().put('reg_' + userId, JSON.stringify(session), 3600);
+}
+function clearRegSession_(userId) {
+  CacheService.getScriptCache().remove('reg_' + userId);
+}
+
+// ─────────── Старт регистрации и справка ───────────
+
+function startRegistration_(userId, chatId) {
+  const existing = findVolunteerByTgId_(userId);
+  if (existing && existing.status === 'Одобрен') {
+    sendMessage_(chatId, '✅ Вы уже зарегистрированы.');
+    return;
+  }
+  if (existing && existing.status === 'На модерации') {
+    sendMessage_(chatId, '⏳ Ваша анкета уже на модерации.');
+    return;
+  }
+  saveRegSession_(userId, { step: 'nickname', data: {} });
+  sendMessage_(chatId,
+    'Отлично! Несколько вопросов — все ответы БЕЗ персональных данных.\n\n' +
+    'Шаг 1/7. Как вас называть?\n(ник или псевдоним, НЕ ФИО)');
+}
+
+function sendHowItWorks_(chatId) {
+  sendMessage_(chatId,
+    '❓ Как это работает:\n' +
+    '1️⃣ Вы заполняете короткую анкету (ник, авто, район, доступность).\n' +
+    '2️⃣ Админ проверяет её (до 24 часов).\n' +
+    '3️⃣ В канале появляются заявки — вы нажимаете «🚕 Готов поехать».\n' +
+    '4️⃣ Админ подтверждает — поездка ваша. Напоминания за 24 ч и за 2 ч.\n\n' +
+    'Мы не собираем ПДн: только ник и модель авто без госномера.');
+}
+
+// ─────────── Текстовые шаги wizard ───────────
+
+function processRegText_(userId, chatId, text, session) {
+  const step = session.step;
+  const san = sanitizeFreeText_(text);
+
+  if (step === 'nickname' || step === 'car' || step === 'area_other') {
+    if (san.flagged) {
+      sendMessage_(chatId,
+        '⚠️ В сообщении похожий на персональные данные текст (телефон, e-mail или госномер).\n' +
+        'Я такое не храню. Ответьте, пожалуйста, без них.');
+      return;
+    }
+    if (step === 'nickname') {
+      session.data.nickname = san.clean;
+      session.step = 'car';
+      saveRegSession_(userId, session);
+      sendMessage_(chatId, 'Принято, ' + san.clean + '!\nШаг 2/7. Авто: марка, модель, цвет (без госномера).');
+    } else if (step === 'car') {
+      session.data.car = san.clean;
+      session.step = 'area';
+      saveRegSession_(userId, session);
+      sendAreaStep_(chatId);
+    } else {
+      session.data.areas = san.clean;
+      session.step = 'days';
+      saveRegSession_(userId, session);
+      sendDaysStep_(chatId, session, null);
+    }
+  } else if (step === 'comments') {
+    session.data.comments = san.clean;
+    session.step = 'confirm';
+    saveRegSession_(userId, session);
+    sendConfirmStep_(chatId, session);
+    if (san.flagged) {
+      sendMessage_(chatId, '⚠️ Часть текста, похожая на ПДн, удалена фильтром.');
+    }
+  } else {
+    sendMessage_(chatId, 'Сейчас выберите вариант кнопками ниже 👇');
+  }
+}
+
+// ─────────── Кнопки wizard ───────────
+
+function handleRegCallback_(userId, chatId, data, messageId) {
+  const parts = data.split(':');
+  const act = parts[1];
+
+  if (act === 'start') { startRegistration_(userId, chatId); return; }
+  if (act === 'how')   { sendHowItWorks_(chatId); return; }
+
+  const session = getRegSession_(userId);
+  if (!session) {
+    sendMessageWithButtons_(chatId, 'Сессия истекла. Начнём заново?', [[
+      { text: '📝 Зарегистрироваться', callback_data: 'reg:start' }
+    ]]);
+    return;
+  }
+
+  if (act === 'area') {
+    if (parts[2] === 'other') {
+      session.step = 'area_other';
+      saveRegSession_(userId, session);
+      sendMessage_(chatId, 'Напишите свой район / город свободным текстом.');
+    } else {
+      session.data.areas = REG_AREAS[parseInt(parts[2], 10)];
+      session.step = 'days';
+      saveRegSession_(userId, session);
+      sendDaysStep_(chatId, session, null);
+    }
+  }
+  else if (act === 'day') {
+    const d = REG_DAYS[parseInt(parts[2], 10)];
+    if (!session.data.days) session.data.days = [];
+    const i = session.data.days.indexOf(d);
+    if (i === -1) session.data.days.push(d); else session.data.days.splice(i, 1);
+    saveRegSession_(userId, session);
+    sendDaysStep_(chatId, session, messageId);
+  }
+  else if (act === 'daysnext') {
+    if (!session.data.days || session.data.days.length === 0) {
+      sendMessage_(chatId, 'Отметьте хотя бы один день.');
+      return;
+    }
+    session.step = 'time';
+    saveRegSession_(userId, session);
+    sendTimeStep_(chatId);
+  }
+  else if (act === 'time') {
+    const t = REG_TIMES.filter(function (x) { return x.key === parts[2]; })[0];
+    session.data.availability_time = t.label;
+    session.step = 'animals';
+    saveRegSession_(userId, session);
+    sendAnimalsStep_(chatId, session, null);
+  }
+  else if (act === 'anim') {
+    const a = REG_ANIMALS[parseInt(parts[2], 10)];
+    if (!session.data.animals) session.data.animals = [];
+    const i = session.data.animals.indexOf(a);
+    if (i === -1) session.data.animals.push(a); else session.data.animals.splice(i, 1);
+    saveRegSession_(userId, session);
+    sendAnimalsStep_(chatId, session, messageId);
+  }
+  else if (act === 'animnext') {
+    if (!session.data.animals || session.data.animals.length === 0) {
+      sendMessage_(chatId, 'Отметьте хотя бы один вариант.');
+      return;
+    }
+    session.step = 'comments';
+    saveRegSession_(userId, session);
+    sendMessageWithButtons_(chatId,
+      'Шаг 7/7. Комментарий (необязательно):\nопыт с животными, особенности авто, что важно знать.',
+      [[{ text: '⏭ Пропустить', callback_data: 'reg:skipcomment' }]]);
+  }
+  else if (act === 'skipcomment') {
+    session.data.comments = '';
+    session.step = 'confirm';
+    saveRegSession_(userId, session);
+    sendConfirmStep_(chatId, session);
+  }
+  else if (act === 'confirm') {
+    finishRegistration_(userId, chatId, session);
+  }
+  else if (act === 'cancel') {
+    clearRegSession_(userId);
+    sendMessage_(chatId, 'Регистрация отменена. Вернуться можно через /start.');
+  }
+}
+
+// ─────────── Экраны шагов ───────────
+
+function sendAreaStep_(chatId) {
+  const row = REG_AREAS.map(function (a, i) {
+    return { text: '📍 ' + a, callback_data: 'reg:area:' + i };
+  });
+  row.push({ text: '✏️ Другой', callback_data: 'reg:area:other' });
+  sendMessageWithButtons_(chatId, 'Шаг 3/7. В каком районе готовы ездить?', [row]);
+}
+
+function sendDaysStep_(chatId, session, messageId) {
+  const selected = session.data.days || [];
+  const row = REG_DAYS.map(function (d, i) {
+    return { text: (selected.indexOf(d) !== -1 ? '✅ ' : '') + d, callback_data: 'reg:day:' + i };
+  });
+  const buttons = [row, [{ text: 'Далее ➡️', callback_data: 'reg:daysnext' }]];
+  const text = 'Шаг 4/7. В какие дни вы обычно готовы помогать?\nНажимайте на дни — они отметятся ✅.';
+  if (messageId) editMessage_(chatId, messageId, text, buttons);
+  else sendMessageWithButtons_(chatId, text, buttons);
+}
+
+function sendTimeStep_(chatId) {
+  const row = REG_TIMES.map(function (t) {
+    return { text: t.label, callback_data: 'reg:time:' + t.key };
+  });
+  sendMessageWithButtons_(chatId, 'Шаг 5/7. В какое время суток вам удобно?', [row]);
+}
+
+function sendAnimalsStep_(chatId, session, messageId) {
+  const selected = session.data.animals || [];
+  const row = REG_ANIMALS.map(function (a, i) {
+    return { text: (selected.indexOf(a) !== -1 ? '✅ ' : '') + a, callback_data: 'reg:anim:' + i };
+  });
+  const buttons = [row, [{ text: 'Далее ➡️', callback_data: 'reg:animnext' }]];
+  const text = 'Шаг 6/7. Кого готовы возить?';
+  if (messageId) editMessage_(chatId, messageId, text, buttons);
+  else sendMessageWithButtons_(chatId, text, buttons);
+}
+
+function sendConfirmStep_(chatId, session) {
+  const d = session.data;
+  const text =
+    '📋 Проверьте анкету:\n\n' +
+    '👤 ' + d.nickname + '\n' +
+    '🚗 ' + d.car + '\n' +
+    '📍 ' + d.areas + '\n' +
+    '📅 Дни: ' + (d.days || []).join(', ') + '\n' +
+    '⏰ ' + d.availability_time + '\n' +
+    '🐾 ' + (d.animals || []).join(', ') + '\n' +
+    (d.comments ? '💬 ' + d.comments + '\n' : '') +
+    '\nНажимая «Подтверждаю», вы принимаете Правила бота.';
+  sendMessageWithButtons_(chatId, text, [[
+    { text: '✅ Подтверждаю', callback_data: 'reg:confirm' },
+    { text: '❌ Отмена', callback_data: 'reg:cancel' }
+  ]]);
+}
+
+// ─────────── Завершение: запись в таблицу + модерация ───────────
+
+function finishRegistration_(userId, chatId, session) {
+  const sheet = getSheet_(SHEET_NAMES.VOLUNTEERS);
+  const d = session.data;
+  const now = new Date();
+  const newRow = sheet.getLastRow() + 1;
+  const volunteerId = newRow - 1;
+
+  sheet.appendRow([
+    volunteerId, userId, d.nickname, d.car, d.areas,
+    (d.days || []).join(', '), d.availability_time,
+    (d.animals || []).join(', '), d.comments || '',
+    'На модерации', now, ''
+  ]);
+
+  // Фиксация принятия Правил бота (ТЗ v2, F14)
+  const resp = getSheet_(SHEET_NAMES.RESPONSES);
+  resp.appendRow([
+    resp.getLastRow(), 0, userId, d.nickname, 'регистрация',
+    'приняты правила v' + (getSetting_('rules_version') || '1.0'), now
+  ]);
+
+  clearRegSession_(userId);
+  sendMessage_(chatId,
+    '✅ Анкета отправлена!\n⏳ Администратор проверит её в течение 24 часов.\n' +
+    'После одобрения вы получите доступ к заявкам.');
+
+  const card =
+    '🆕 Новая анкета волонтёра!\n\n' +
+    '👤 ' + d.nickname + '\n' +
+    '🚗 ' + d.car + '\n' +
+    '📍 ' + d.areas + '\n' +
+    '📅 ' + (d.days || []).join(', ') + ', ' + d.availability_time + '\n' +
+    '🐾 ' + (d.animals || []).join(', ') + '\n' +
+    (d.comments ? '💬 ' + d.comments + '\n' : '');
+
+  getAdminIds_().forEach(function (adminId) {
+    sendMessageWithButtons_(adminId, card, [[
+      { text: '✅ Одобрить', callback_data: 'adm:appr:' + newRow },
+      { text: '❌ Отклонить', callback_data: 'adm:rej:' + newRow }
+    ]]);
+  });
+
+  logEvent_('registration', 'REGISTRATION_SUBMITTED', { user_id: userId, row: newRow });
+}
+
+// ─────────── Модерация админом ───────────
+
+function handleAdminCallback_(userId, chatId, data) {
+  if (!isUserAdmin_(userId)) {
+    sendMessage_(chatId, '⛔ Доступно только администраторам.');
+    logEvent_('security', 'NON_ADMIN_ADMIN_CALLBACK', { user_id: userId, data: data });
+    return;
+  }
+  const parts = data.split(':');
+  const row = parseInt(parts[2], 10);
+  const sheet = getSheet_(SHEET_NAMES.VOLUNTEERS);
+
+  if (row < 2 || row > sheet.getLastRow()) {
+    sendMessage_(chatId, '❌ Анкета не найдена (строка ' + row + ').');
+    return;
+  }
+
+  const tgId = sheet.getRange(row, 2).getValue();
+  const nick = sheet.getRange(row, 3).getValue();
+  const status = sheet.getRange(row, 10).getValue();
+
+  if (status !== 'На модерации') {
+    sendMessage_(chatId, 'ℹ️ Анкета #' + (row - 1) + ' уже обработана (статус: ' + status + ').');
+    return;
+  }
+
+  if (parts[1] === 'appr') {
+    sheet.getRange(row, 10).setValue('Одобрен');
+    sheet.getRange(row, 12).setValue(new Date());
+    sendMessage_(tgId,
+      '🎉 Анкета одобрена!\nВам открыт доступ к заявкам.\n' +
+      'Команды: /open_trips, /my_trips, /profile, /availability');
+    sendMessage_(chatId, '✅ Волонтёр ' + nick + ' одобрен.');
+    logEvent_('moderation', 'VOLUNTEER_APPROVED', { row: row, admin: userId });
+  } else if (parts[1] === 'rej') {
+    sheet.getRange(row, 10).setValue('Отклонён');
+    sendMessage_(tgId, '❌ К сожалению, анкета не одобрена.\nВопросы можно задать администратору приюта.');
+    sendMessage_(chatId, '❌ Волонтёр ' + nick + ' отклонён.');
+    logEvent_('moderation', 'VOLUNTEER_REJECTED', { row: row, admin: userId });
+  }
+}
+
+// ─────────── Вспомогательные ───────────
+
+function findVolunteerByTgId_(userId) {
+  const sheet = getSheet_(SHEET_NAMES.VOLUNTEERS);
+  const last = sheet.getLastRow();
+  if (last < 2) return null;
+  const values = sheet.getRange(2, 1, last - 1, 12).getValues();
+  for (let i = 0; i < values.length; i++) {
+    if (String(values[i][1]) === String(userId) && values[i][9] !== 'Удалён') {
+      return {
+        row: i + 2,
+        id: values[i][0],
+        nickname: values[i][2],
+        car: values[i][3],
+        areas: values[i][4],
+        availability_days: values[i][5],
+        availability_time: values[i][6],
+        status: values[i][9]
+      };
+    }
+  }
+  return null;
+}
+
+function getAdminIds_() {
+  const raw = getSetting_('admin_ids') || '';
+  return raw.split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s !== ''; });
+}
+
+function getSetting_(key) {
+  const sheet = getSheet_(SHEET_NAMES.SETTINGS);
+  const data = sheet.getDataRange().getValues();
+  for (let i = 0; i < data.length; i++) {
+    if (String(data[i][0]) === key) return String(data[i][1]);
+  }
+  return '';
+}
+
+/** ПДн-фильтр (ТЗ v2, разд. 3.3): маска телефона, e-mail, госномера */
+function sanitizeFreeText_(text) {
+  let clean = text;
+  let flagged = false;
+  const patterns = [
+    /(\+?\d[\d\s\-\(\)]{9,}\d)/,                                       // телефон
+    /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/,                // e-mail
+    /([АВЕКМНОРСТУХ]\s?\d{3}\s?[АВЕКМНОРСТУХ]{2}\s?\d{2,3})/i          // госномер
+  ];
+  patterns.forEach(function (p) {
+    if (clean.match(p)) { flagged = true; clean = clean.replace(p, '[удалено ботом]'); }
+  });
+  return { clean: clean, flagged: flagged };
+}
+
+/** Редактирование сообщения с кнопками (для чекбоксов дней/животных) */
+function editMessage_(chatId, messageId, text, buttons) {
+  return callTelegramAPI_('editMessageText', {
+    chat_id: chatId,
+    message_id: messageId,
+    text: text,
+    reply_markup: JSON.stringify({ inline_keyboard: buttons })
+  });
+}
