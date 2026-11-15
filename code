@@ -333,24 +333,23 @@ function isUserAdmin_(userId) {
 }
 
 /**
- * Идемпотентность: проверка дублей update_id.
- * Два контура: быстрый кэш (6 часов) + счётчик last_update_id в «Настройках».
+ * Идемпотентность: проверка дублей update_id по единому счётчику last_update_id.
  */
 function isDuplicateUpdate_(updateId) {
   if (!updateId) return false;
-  const last = parseInt(PropertiesService.getScriptProperties().getProperty('last_update_id') || '0', 10);
+  const last = parseInt(PropertiesService.getScriptProperties().getProperty(LAST_UPDATE_KEY) || '0', 10);
   return updateId <= last;
 }
 
 /**
- * Пометить update_id как обработанный (кэш + счётчик в «Настройках»).
+ * Пометить update_id как обработанный (продвинуть last_update_id).
  */
 function markUpdateProcessed_(updateId) {
   if (!updateId) return;
   const props = PropertiesService.getScriptProperties();
-  const current = parseInt(props.getProperty('last_update_id') || '0', 10);
+  const current = parseInt(props.getProperty(LAST_UPDATE_KEY) || '0', 10);
   if (updateId > current) {
-    props.setProperty('last_update_id', String(updateId));
+    props.setProperty(LAST_UPDATE_KEY, String(updateId));
   }
 }
 
@@ -404,16 +403,60 @@ function getSheet_(name) {
 // getUpdates раз в минуту (time-based trigger). Исходящие запросы через
 // UrlFetchApp при этом работают надёжно.
 
-const TG_OFFSET_KEY = 'TG_OFFSET';
+const LAST_UPDATE_KEY = 'last_update_id';
+const FAILED_UPDATES_KEY = 'failed_updates';
+const MAX_FAILED = 3; // сколько раз повторять битый апдейт перед пропуском
+
+/**
+ * Транзиентная ли ошибка (стоит повторить) или фатальная (бесполезно)?
+ * Сетевые сбои Telegram уже глотаются внутри callTelegramAPI_, поэтому сюда
+ * обычно долетают фатальные (лист/парсинг/данные). Транзиентными считаем
+ * ресурсные/сетевые исключения GAS (quota, timeout, network).
+ */
+function isTransientError_(error) {
+  const msg = String((error && error.message) || error || '');
+  return /quota|rate.?limit|too many|timeout|timed ?out|network|fetch|ec2|socket|429|5\d\d/i.test(msg);
+}
+
+/**
+ * Извлечь chat_id из update для оповещения о сбое.
+ * Для callback отвечаем в личный чат (как handleCallback_).
+ */
+function getChatIdFromUpdate_(update) {
+  if (!update) return null;
+  if (update.message && update.message.chat) return update.message.chat.id;
+  if (update.callback_query) return update.callback_query.from.id;
+  return null;
+}
+
+/**
+ * Оповестить пользователя о том, что команда не выполнена до конца.
+ * Оборачиваем в try/catch: сама отправка может упасть из-за той же сети.
+ */
+function notifyProcessingError_(update) {
+  const chatId = getChatIdFromUpdate_(update);
+  if (!chatId) return;
+  try {
+    sendMessage_(chatId,
+      '⚠️ По техническим причинам не удалось выполнить команду до конца.\n' +
+      'Повторите, пожалуйста, последнее действие.');
+  } catch (e) {
+    console.error('Не удалось оповестить пользователя о сбое:', e.toString());
+  }
+}
 
 /**
  * Опрос Telegram через getUpdates.
- * Создаётся триггером setupFastPolling (каждые ~30 секунд).
+ * Идемпотентность: единый источник — last_update_id, offset = last_update_id + 1.
+ * Блокирующий ретрай: при транзиентной ошибке апдейт НЕ подтверждается и НЕ
+ * продвигает offset — следующий тик повторит его (и хвост очереди задержится,
+ * что приемлемо при низком трафике). После MAX_FAILED — оповещаем и пропускаем.
+ * Фатальная ошибка — сразу оповещаем и подтверждаем (re-работать бессмысленно).
  */
 function pollTelegram() {
   console.log('═══════════════════════════════════════');
   console.log('🔔 pollTelegram СТАРТ в', new Date().toLocaleTimeString());
-  
+
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) {
     console.log('⚠️ Другой инстанс уже работает, выход');
@@ -422,11 +465,11 @@ function pollTelegram() {
 
   try {
     const props = PropertiesService.getScriptProperties();
-    const offset = parseInt(props.getProperty(TG_OFFSET_KEY) || '0', 10);
-    console.log('📊 TG_OFFSET:', offset);
-    
+    const last = parseInt(props.getProperty(LAST_UPDATE_KEY) || '0', 10);
+    const offset = last + 1;
+    console.log('📊 last_update_id:', last, '→ offset:', offset);
+
     const url = TELEGRAM_API + '/getUpdates?offset=' + offset + '&timeout=0';
-    console.log('🌐 Запрос:', url.substring(0, 80) + '...');
 
     const resp = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true });
     const data = JSON.parse(resp.getContentText());
@@ -439,34 +482,40 @@ function pollTelegram() {
 
     const updates = data.result || [];
     console.log('📨 Обновлений получено:', updates.length);
-    
+
     if (!updates.length) {
       console.log('ℹ️ Нет новых сообщений, выход');
       return;
     }
 
-    // Сортируем по update_id
+    // Сортируем по update_id (Telegram и так отдаёт по порядку — страховка).
     updates.sort((a, b) => a.update_id - b.update_id);
-    
-    let maxUpdateId = offset;
+
+    // Счётчик неудачных попыток по апдейтам (id -> число попыток).
+    const failed = readFailedUpdates_(props);
+
     let processedCount = 0;
 
     for (const update of updates) {
       const updateId = update.update_id;
-      
-      // Всегда продвигаем maxUpdateId вперёд
-      if (updateId > maxUpdateId) {
-        maxUpdateId = updateId;
+
+      // Страховка от повторной отдачи того же номера (нормально быть не должно).
+      if (updateId <= last) {
+        console.log('⏭ Повторная отдача апдейта', updateId, '— пропуск');
+        continue;
       }
-      
-      // Проверяем идемпотентность через last_update_id (не через offset)
-      if (isDuplicateUpdate_(updateId)) {
-        console.log('⏭ Пропуск дубля', updateId, '(уже обработан через last_update_id)');
+
+      // Исчерпал лимит попыток — подтверждаем, оповещаем, двигаемся дальше.
+      if (failed[updateId] >= MAX_FAILED) {
+        console.error('⛔ Апдейт', updateId, 'провалился', failed[updateId], 'раз — пропускаю');
+        delete failed[updateId];
+        notifyProcessingError_(update);
+        markUpdateProcessed_(updateId);
         continue;
       }
 
       console.log('▶️ Обрабатываю', updateId);
-      
+
       try {
         if (update.message) {
           const text = update.message.text || '';
@@ -476,24 +525,34 @@ function pollTelegram() {
           console.log('  → CALLBACK от', update.callback_query.from.id, ':', update.callback_query.data);
           handleCallback_(update.callback_query);
         }
-        
-        // Помечаем как обработанный
+
+        // Успех: снимаем счётчик неудач, подтверждаем апдейт.
+        delete failed[updateId];
         markUpdateProcessed_(updateId);
         processedCount++;
         console.log('  ✅ Обработано успешно');
-        
+
       } catch (error) {
         console.error('  ❌ ОШИБКА обработки:', error.toString());
+
+        if (isTransientError_(error)) {
+          // Транзиентный сбой: НЕ подтверждаем и НЕ продвигаем offset —
+          // следующий тик повторит апдейт. Прерываем цикл: хвост очереди
+          // подождёт (head-of-line blocking), зато ничего не теряем и не дублируем.
+          failed[updateId] = (failed[updateId] || 0) + 1;
+          console.error('  🔁 Ретрай', failed[updateId] + '/' + MAX_FAILED, '— offset не продвигаю');
+          writeFailedUpdates_(props, failed);
+          return;
+        }
+
+        // Фатальная ошибка: оповещаем пользователя и подтверждаем, чтобы не блокировать.
         console.error('  Stack:', error.stack);
-        // Даже при ошибке помечаем как обработанный, чтобы не зацикливаться
+        notifyProcessingError_(update);
         markUpdateProcessed_(updateId);
       }
     }
 
-    // ВСЕГДА продвигаем TG_OFFSET вперёд, даже если все обновления были дублями
-    const newOffset = maxUpdateId + 1;
-    props.setProperty(TG_OFFSET_KEY, String(newOffset));
-    console.log('💾 TG_OFFSET обновлён:', offset, '→', newOffset);
+    writeFailedUpdates_(props, failed);
     console.log('✅ Обработано новых:', processedCount);
     console.log('═══════════════════════════════════════');
 
@@ -505,8 +564,19 @@ function pollTelegram() {
   }
 }
 
+/** Прочитать счётчик неудачных апдейтов (JSON в ScriptProperties). */
+function readFailedUpdates_(props) {
+  try { return JSON.parse(props.getProperty(FAILED_UPDATES_KEY) || '{}'); }
+  catch (e) { return {}; }
+}
+
+/** Сохранить счётчик неудачных апдейтов. */
+function writeFailedUpdates_(props, failed) {
+  props.setProperty(FAILED_UPDATES_KEY, JSON.stringify(failed));
+}
+
 /**
- * Создаёт 2 триггера со смещением для polling каждые ~30 секунд.
+ * Создаёт триггер polling раз в минуту (минимальный интервал GAS).
  * Запустите ОДИН РАЗ после деплоя.
  */
 function setupFastPolling() {
@@ -514,10 +584,9 @@ function setupFastPolling() {
     if (t.getHandlerFunction() === 'pollTelegram') ScriptApp.deleteTrigger(t);
   });
 
-  // Два триггера с минимальным интервалом
   ScriptApp.newTrigger('pollTelegram').timeBased().everyMinutes(1).create();
 
-  console.log('✅ Быстрый polling создан (каждые ~30-60 сек).');
+  console.log('✅ Polling-триггер создан (раз в минуту).');
 }
 
 /**
@@ -545,21 +614,22 @@ function requestPermissions() {
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * Сбросить TG_OFFSET в 0.
+ * Сбросить last_update_id в 0.
  * Бот начнёт обрабатывать все накопившиеся обновления Telegram.
  * Идемпотентность (isDuplicateUpdate_) защитит от повторов.
  */
 function resetOffset() {
   const props = PropertiesService.getScriptProperties();
-  const oldOffset = props.getProperty(TG_OFFSET_KEY) || '0';
-  props.setProperty(TG_OFFSET_KEY, '0');
-  console.log('✅ TG_OFFSET сброшен: ' + oldOffset + ' → 0');
+  const oldLast = props.getProperty(LAST_UPDATE_KEY) || '0';
+  props.setProperty(LAST_UPDATE_KEY, '0');
+  props.deleteProperty(FAILED_UPDATES_KEY);
+  console.log('✅ last_update_id сброшен: ' + oldLast + ' → 0');
   console.log('Теперь бот получит все накопившиеся обновления.');
 }
 
 /**
- * Установить конкретное значение offset.
- * Использовать, если знаете точный offset для старта.
+ * Установить конкретное значение last_update_id.
+ * Использовать, если знаете точный номер для старта.
  */
 function setOffset(value) {
   const props = PropertiesService.getScriptProperties();
@@ -568,73 +638,69 @@ function setOffset(value) {
     console.error('❌ Некорректное значение:', value);
     return;
   }
-  props.setProperty(TG_OFFSET_KEY, String(v));
-  console.log('✅ TG_OFFSET установлен в:', v);
+  props.setProperty(LAST_UPDATE_KEY, String(v));
+  console.log('✅ last_update_id установлен в:', v);
 }
 
 /**
- * Показать текущее значение offset и last_update_id.
+ * Показать текущее значение last_update_id и счётчик неудачных апдейтов.
  */
 function showOffset() {
   const props = PropertiesService.getScriptProperties();
-  const tgOffset = props.getProperty(TG_OFFSET_KEY) || '0';
-  const lastUpdate = props.getProperty('last_update_id') || '0';
+  const lastUpdate = props.getProperty(LAST_UPDATE_KEY) || '0';
+  const failed = readFailedUpdates_(props);
   console.log('📊 Текущие счётчики:');
-  console.log('  TG_OFFSET (polling):', tgOffset);
-  console.log('  last_update_id (идемпотентность):', lastUpdate);
+  console.log('  last_update_id (идемпотентность/offset):', lastUpdate);
+  console.log('  failed_updates:', JSON.stringify(failed));
 }
 
 /**
- * Полный сброс: offset + счётчик идемпотентности + удаление webhook.
+ * Полный сброс: счётчик идемпотентности + очистка неудачных + удаление webhook.
  * Использовать, если бот "застрял" и не реагирует на сообщения.
  */
 function resetAllState() {
   const props = PropertiesService.getScriptProperties();
-  props.setProperty(TG_OFFSET_KEY, '0');
-  props.setProperty('last_update_id', '0');
+  props.setProperty(LAST_UPDATE_KEY, '0');
+  props.deleteProperty(FAILED_UPDATES_KEY);
   console.log('✅ Счётчики сброшены.');
-  
+
   // Удаляем webhook на всякий случай
   const result = callTelegramAPI_('deleteWebhook', { drop_pending_updates: true });
   console.log(result.ok ? '✅ Webhook удалён' : 'ℹ️ Webhook и так не установлен');
-  
-  // Удаляем кэш идемпотентности
-  const cache = CacheService.getScriptCache();
-  // Кэш не имеет метода очистки — ключи протухнут сами за 6 часов
-  
+
   console.log('🎯 Готово. Подождите 1 минуту — бот начнёт получать обновления.');
 }
 
 function testPollingManually() {
   console.log('🔍 Ручной тест polling...');
-  
+
   const props = PropertiesService.getScriptProperties();
-  const offset = props.getProperty(TG_OFFSET_KEY) || '0';
-  console.log('1. Текущий TG_OFFSET:', offset);
-  
+  const last = parseInt(props.getProperty(LAST_UPDATE_KEY) || '0', 10);
+  const offset = last + 1;
+  console.log('1. Текущий last_update_id:', last);
+
   const url = TELEGRAM_API + '/getUpdates?offset=' + offset + '&timeout=0';
-  console.log('2. Запрашиваем URL:', url);
-  
+
   try {
     const resp = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true });
     const data = JSON.parse(resp.getContentText());
-    
+
     console.log('3. Ответ Telegram:', JSON.stringify(data, null, 2));
-    
+
     if (!data.ok) {
       console.error('❌ Ошибка API:', data.description);
       return;
     }
-    
+
     const updates = data.result || [];
     console.log('4. Количество обновлений:', updates.length);
-    
+
     if (updates.length === 0) {
       console.log('ℹ️ Новых сообщений нет. Попробуйте написать боту и повторите testPollingManually.');
     } else {
       console.log('5. Первое обновление:', JSON.stringify(updates[0], null, 2));
     }
-    
+
   } catch (error) {
     console.error('❌ Ошибка запроса:', error.toString());
   }
