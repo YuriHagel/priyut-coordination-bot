@@ -39,6 +39,7 @@ function startRegistration_(userId, chatId) {
   }
   saveRegSession_(userId, { step: 'nickname', data: {} });
   sendMessage_(chatId,
+    RESPONSE_DELAY_HINT +
     'Отлично! Несколько вопросов — все ответы БЕЗ персональных данных.\n\n' +
     'Шаг 1/7. Как вас называть?\n(ник или псевдоним, НЕ ФИО)');
 }
