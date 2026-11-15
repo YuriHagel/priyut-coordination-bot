@@ -286,8 +286,11 @@ function cmdExportTrips_(chatId, userId) {
   const csv = '\ufeff' + lines.join('\r\n'); // BOM + CRLF для Excel
   const name = 'trips_export_' + Utilities.formatDate(new Date(), 'Europe/Moscow', 'yyyy-MM-dd') + '.csv';
   const blob = Utilities.newBlob(csv, 'text/csv', name);
-  sendDocument_(chatId, blob, '📄 Экспорт истории поездок (' + vals.length + ' строк)');
+  const res = sendDocument_(chatId, blob, '📄 Экспорт истории поездок (' + vals.length + ' строк)');
   logEvent_('export', 'TRIPS_EXPORTED', { user_id: userId, rows: vals.length });
+  if (!res.ok) {
+    sendMessage_(chatId, '⚠️ Не удалось отправить CSV. Попробуйте ещё раз позже.');
+  }
 }
 
 function fmtCsvDate_(v) {
@@ -301,12 +304,38 @@ function csvEsc_(v) {
 }
 function sendDocument_(chatId, blob, caption) {
   const url = 'https://api.telegram.org/bot' + BOT_TOKEN + '/sendDocument';
-  const res = UrlFetchApp.fetch(url, {
-    method: 'post',
-    payload: { chat_id: chatId, caption: caption, document: blob },
-    muteHttpExceptions: true
-  });
-  return JSON.parse(res.getContentText());
+  const payload = {
+    chat_id: chatId,
+    caption: caption,
+    document: blob
+  };
+
+  try {
+    const res = UrlFetchApp.fetch(url, {
+      method: 'post',
+      payload: payload,
+      contentType: 'multipart/form-data',
+      muteHttpExceptions: true
+    });
+    const result = JSON.parse(res.getContentText());
+
+    if (!result.ok) {
+      logEvent_('telegram_api', 'API_ERROR', {
+        method: 'sendDocument',
+        error: result.description,
+        payload: { chat_id: chatId, caption: caption }
+      });
+    }
+
+    return result;
+
+  } catch (error) {
+    logEvent_('telegram_api', 'FETCH_EXCEPTION', {
+      method: 'sendDocument',
+      error: error.toString()
+    });
+    return { ok: false, description: error.toString() };
+  }
 }
 
 // ─────────── /delete_profile (сценарий Ж, без ПДн) ───────────
