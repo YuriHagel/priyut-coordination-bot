@@ -411,52 +411,97 @@ const TG_OFFSET_KEY = 'TG_OFFSET';
  * Создаётся триггером setupFastPolling (каждые ~30 секунд).
  */
 function pollTelegram() {
+  console.log('═══════════════════════════════════════');
+  console.log('🔔 pollTelegram СТАРТ в', new Date().toLocaleTimeString());
+  
   const lock = LockService.getScriptLock();
-  try {
-    lock.waitLock(15000);
+  if (!lock.tryLock(5000)) {
+    console.log('⚠️ Другой инстанс уже работает, выход');
+    return;
+  }
 
+  try {
     const props = PropertiesService.getScriptProperties();
     const offset = parseInt(props.getProperty(TG_OFFSET_KEY) || '0', 10);
-
-    // Long polling: timeout=30 блокирует до 30 сек, пока нет новых событий
-    const url = TELEGRAM_API + '/getUpdates?offset=' + offset +
-                '&timeout=30&allowed_updates=["message","callback_query"]';
+    console.log('📊 TG_OFFSET:', offset);
+    
+    const url = TELEGRAM_API + '/getUpdates?offset=' + offset + '&timeout=0';
+    console.log('🌐 Запрос:', url.substring(0, 80) + '...');
 
     const resp = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true });
     const data = JSON.parse(resp.getContentText());
 
+    console.log('✅ Ответ ok:', data.ok);
     if (!data.ok) {
-      console.error('getUpdates error:', data.description);
+      console.error('❌ Ошибка:', data.description);
       return;
     }
 
     const updates = data.result || [];
-    if (!updates.length) return;
+    console.log('📨 Обновлений получено:', updates.length);
+    
+    if (!updates.length) {
+      console.log('ℹ️ Нет новых сообщений, выход');
+      return;
+    }
 
-    let maxId = offset;
-
-    // Сортируем по update_id для гарантии порядка
+    // Сортируем по update_id
     updates.sort((a, b) => a.update_id - b.update_id);
+    
+    let maxUpdateId = offset;
+    let processedCount = 0;
 
     for (const update of updates) {
       const updateId = update.update_id;
-      if (updateId <= maxId) continue;
-
-      if (update.message) {
-        handleMessage_(update.message);
-      } else if (update.callback_query) {
-        handleCallback_(update.callback_query);
+      
+      // Всегда продвигаем maxUpdateId вперёд
+      if (updateId > maxUpdateId) {
+        maxUpdateId = updateId;
+      }
+      
+      // Проверяем идемпотентность через last_update_id (не через offset)
+      if (isDuplicateUpdate_(updateId)) {
+        console.log('⏭ Пропуск дубля', updateId, '(уже обработан через last_update_id)');
+        continue;
       }
 
-      maxId = updateId + 1;
+      console.log('▶️ Обрабатываю', updateId);
+      
+      try {
+        if (update.message) {
+          const text = update.message.text || '';
+          console.log('  → MESSAGE от', update.message.from.id, ':', text.substring(0, 30));
+          handleMessage_(update.message);
+        } else if (update.callback_query) {
+          console.log('  → CALLBACK от', update.callback_query.from.id, ':', update.callback_query.data);
+          handleCallback_(update.callback_query);
+        }
+        
+        // Помечаем как обработанный
+        markUpdateProcessed_(updateId);
+        processedCount++;
+        console.log('  ✅ Обработано успешно');
+        
+      } catch (error) {
+        console.error('  ❌ ОШИБКА обработки:', error.toString());
+        console.error('  Stack:', error.stack);
+        // Даже при ошибке помечаем как обработанный, чтобы не зацикливаться
+        markUpdateProcessed_(updateId);
+      }
     }
 
-    props.setProperty(TG_OFFSET_KEY, String(maxId));
+    // ВСЕГДА продвигаем TG_OFFSET вперёд, даже если все обновления были дублями
+    const newOffset = maxUpdateId + 1;
+    props.setProperty(TG_OFFSET_KEY, String(newOffset));
+    console.log('💾 TG_OFFSET обновлён:', offset, '→', newOffset);
+    console.log('✅ Обработано новых:', processedCount);
+    console.log('═══════════════════════════════════════');
 
   } catch (error) {
-    console.error('pollTelegram error:', error.toString());
+    console.error('❌ КРИТИЧЕСКАЯ ОШИБКА:', error.toString());
+    console.error('Stack:', error.stack);
   } finally {
-    lock.releaseLock();
+    try { lock.releaseLock(); } catch (e) { /* игнор */ }
   }
 }
 
@@ -486,16 +531,6 @@ function deletePollingTriggers() {
 }
 
 /**
- * Создаёт триггер опроса (раз в минуту). Запустите ОДИН РАЗ вручную.
- * Убедитесь, что webhook не установлен (иначе getUpdates не отдаёт апдейты).
- */
-function setupPollingTrigger() {
-  ScriptApp.getProjectTriggers().forEach(function (t) { ScriptApp.deleteTrigger(t); });
-  ScriptApp.newTrigger('pollTelegram').timeBased().everyMinutes(1).create();
-  console.log('✅ Триггер pollTelegram создан (каждую минуту).');
-}
-
-/**
  * Принудительный запрос разрешений для UrlFetchApp.
  * Запустите ОДИН РАЗ, примите разрешения, затем удалите эту функцию.
  */
@@ -503,4 +538,104 @@ function requestPermissions() {
   // Простой запрос к Google, чтобы появилось окно авторизации
   UrlFetchApp.fetch('https://www.google.com');
   console.log('✅ Разрешения получены! Теперь запустите setupFastPolling.');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// УПРАВЛЕНИЕ OFFSET (для ручной синхронизации)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Сбросить TG_OFFSET в 0.
+ * Бот начнёт обрабатывать все накопившиеся обновления Telegram.
+ * Идемпотентность (isDuplicateUpdate_) защитит от повторов.
+ */
+function resetOffset() {
+  const props = PropertiesService.getScriptProperties();
+  const oldOffset = props.getProperty(TG_OFFSET_KEY) || '0';
+  props.setProperty(TG_OFFSET_KEY, '0');
+  console.log('✅ TG_OFFSET сброшен: ' + oldOffset + ' → 0');
+  console.log('Теперь бот получит все накопившиеся обновления.');
+}
+
+/**
+ * Установить конкретное значение offset.
+ * Использовать, если знаете точный offset для старта.
+ */
+function setOffset(value) {
+  const props = PropertiesService.getScriptProperties();
+  const v = parseInt(value, 10);
+  if (isNaN(v)) {
+    console.error('❌ Некорректное значение:', value);
+    return;
+  }
+  props.setProperty(TG_OFFSET_KEY, String(v));
+  console.log('✅ TG_OFFSET установлен в:', v);
+}
+
+/**
+ * Показать текущее значение offset и last_update_id.
+ */
+function showOffset() {
+  const props = PropertiesService.getScriptProperties();
+  const tgOffset = props.getProperty(TG_OFFSET_KEY) || '0';
+  const lastUpdate = props.getProperty('last_update_id') || '0';
+  console.log('📊 Текущие счётчики:');
+  console.log('  TG_OFFSET (polling):', tgOffset);
+  console.log('  last_update_id (идемпотентность):', lastUpdate);
+}
+
+/**
+ * Полный сброс: offset + счётчик идемпотентности + удаление webhook.
+ * Использовать, если бот "застрял" и не реагирует на сообщения.
+ */
+function resetAllState() {
+  const props = PropertiesService.getScriptProperties();
+  props.setProperty(TG_OFFSET_KEY, '0');
+  props.setProperty('last_update_id', '0');
+  console.log('✅ Счётчики сброшены.');
+  
+  // Удаляем webhook на всякий случай
+  const result = callTelegramAPI_('deleteWebhook', { drop_pending_updates: true });
+  console.log(result.ok ? '✅ Webhook удалён' : 'ℹ️ Webhook и так не установлен');
+  
+  // Удаляем кэш идемпотентности
+  const cache = CacheService.getScriptCache();
+  // Кэш не имеет метода очистки — ключи протухнут сами за 6 часов
+  
+  console.log('🎯 Готово. Подождите 1 минуту — бот начнёт получать обновления.');
+}
+
+function testPollingManually() {
+  console.log('🔍 Ручной тест polling...');
+  
+  const props = PropertiesService.getScriptProperties();
+  const offset = props.getProperty(TG_OFFSET_KEY) || '0';
+  console.log('1. Текущий TG_OFFSET:', offset);
+  
+  const url = TELEGRAM_API + '/getUpdates?offset=' + offset + '&timeout=0';
+  console.log('2. Запрашиваем URL:', url);
+  
+  try {
+    const resp = UrlFetchApp.fetch(url, { method: 'get', muteHttpExceptions: true });
+    const data = JSON.parse(resp.getContentText());
+    
+    console.log('3. Ответ Telegram:', JSON.stringify(data, null, 2));
+    
+    if (!data.ok) {
+      console.error('❌ Ошибка API:', data.description);
+      return;
+    }
+    
+    const updates = data.result || [];
+    console.log('4. Количество обновлений:', updates.length);
+    
+    if (updates.length === 0) {
+      console.log('ℹ️ Новых сообщений нет. Попробуйте написать боту и повторите testPollingManually.');
+    } else {
+      console.log('5. Первое обновление:', JSON.stringify(updates[0], null, 2));
+    }
+    
+  } catch (error) {
+    console.error('❌ Ошибка запроса:', error.toString());
+  }
 }
