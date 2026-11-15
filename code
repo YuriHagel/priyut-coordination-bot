@@ -20,6 +20,11 @@ const TELEGRAM_API = 'https://api.telegram.org/bot' + BOT_TOKEN;
 // Метка сборки для /version
 const BUILD = '1.0 - final';
 
+// Дисклеймер о задержке ответа: бот опрашивает Telegram раз в минуту (polling),
+// поэтому между действием пользователя и ответом бота может пройти до ~60 секунд.
+// Показываем один раз в начале (в /start и входах wizard), а не на каждом шаге.
+const RESPONSE_DELAY_HINT = '⏳ Бот отвечает в течение минуты — не дублируйте команду, пока не прошло ~60 секунд.\n\n';
+
 // ID листов таблицы (загружаем один раз при старте скрипта)
 const SHEET_NAMES = {
   VOLUNTEERS: 'Волонтёры',
@@ -178,7 +183,8 @@ function cmdStart_(chatId, userId) {
   const rulesVer = getSetting_('rules_version') || '1.0';
   const rulesDate = getSetting_('rules_date') || '31.10.2026';
 
-  let text = '👋 Здравствуйте! Я бот-координатор автоволонтёров приюта «Приютино».\n\n' +
+  let text = RESPONSE_DELAY_HINT +
+    '👋 Здравствуйте! Я бот-координатор автоволонтёров приюта «Приютино».\n\n' +
     '⚠️ Важно: я НЕ собираю персональные данные. Не указывайте ФИО и телефон — только ник.\n' +
     '📄 Правила бота: версия ' + rulesVer + ' от ' + rulesDate + '.\n\n';
 
