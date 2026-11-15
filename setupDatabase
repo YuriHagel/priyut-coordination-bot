@@ -4,7 +4,7 @@
  */
 function setupDatabase() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  
+
   // 0. Очистка старых листов (снимает старые защиты, если были)
   const sheetNames = ['Волонтёры', 'Поездки', 'Отклики', 'Журнал', 'Настройки', 'Очередь'];
   sheetNames.forEach(name => {
@@ -31,8 +31,8 @@ function setupDatabase() {
   volunteers.getRange(2, 10, 1000, 1).setDataValidation(volStatusRule);
 
   // Форматы
-  volunteers.getRange(2, 1, 1000, 1).setNumberFormat('0');           
-  volunteers.getRange(2, 2, 1000, 2).setNumberFormat('@');           
+  volunteers.getRange(2, 1, 1000, 1).setNumberFormat('0');
+  volunteers.getRange(2, 2, 1000, 2).setNumberFormat('@');
   volunteers.getRange(2, 11, 1000, 2).setNumberFormat('dd.MM.yyyy HH:mm');
 
   // 2. ЛИСТ «Поездки»
@@ -84,7 +84,7 @@ function setupDatabase() {
   responses.getRange(2, 5, 1000, 1).setDataValidation(actionRule);
 
   responses.getRange(2, 1, 1000, 3).setNumberFormat('0');
-  responses.getRange(2, 3, 1000, 1).setNumberFormat('@'); 
+  responses.getRange(2, 3, 1000, 1).setNumberFormat('@');
   responses.getRange(2, 7, 1000, 1).setNumberFormat('dd.MM.yyyy HH:mm');
 
   // 4. ЛИСТ «Журнал» (технический)
@@ -99,14 +99,14 @@ function setupDatabase() {
   const settingsData = [
     ['key', 'value', 'comment'],
     ['admin_ids', '123456789,987654321', 'Telegram ID админов через запятую'],
-    ['channel_id', '@priyutino_avto', 'Канал публикаций (публичное имя или -100xxxx)'],
+    ['channel_id', '@priyut_avto', 'Канал публикаций (публичное имя или -100xxxx)'],
     ['rules_version', '1.0', 'Версия Правил бота'],
     ['rules_date', '31.10.2026', 'Дата публикации Правил'],
     ['reminder_24h_enabled', '1', '1=вкл / 0=выкл'],
     ['reminder_2h_enabled', '1', '1=вкл / 0=выкл'],
     ['urgent_broadcast_enabled', '1', 'Персональная рассылка срочных'],
     ['urgent_broadcast_chunk', '400', 'Размер чанка рассылки'],
-    ['last_update_id', '0', 'Последний обработанный update_id (идемпотентность)'],
+    ['admin_contact', '', 'Контакт админа для волонтёров (в тексте поездки/подтверждения)'],
     ['backup_enabled', '1', 'Автобэкап файла Drive']
   ];
   settings.getRange(1, 1, settingsData.length, 3).setValues(settingsData);
@@ -126,7 +126,7 @@ function setupDatabase() {
   queue.getRange(2, 4, 1000, 1).setDataValidation(queueStatusRule);
 
   queue.getRange(2, 1, 1000, 3).setNumberFormat('0');
-  queue.getRange(2, 2, 1000, 1).setNumberFormat('@'); 
+  queue.getRange(2, 2, 1000, 1).setNumberFormat('@');
   queue.getRange(2, 5, 1000, 2).setNumberFormat('dd.MM.yyyy HH:mm');
 
   // 7. Защищённые диапазоны (только владелец файла может править вручную)
