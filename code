@@ -17,6 +17,9 @@ if (!BOT_TOKEN) {
 
 const TELEGRAM_API = 'https://api.telegram.org/bot' + BOT_TOKEN;
 
+// Метка сборки для /version
+const BUILD = '1.0 - final';
+
 // ID листов таблицы (загружаем один раз при старте скрипта)
 const SHEET_NAMES = {
   VOLUNTEERS: 'Волонтёры',
