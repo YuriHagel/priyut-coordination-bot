@@ -26,6 +26,7 @@ function cmdNewTrip_(chatId, userId) {
   }
   saveTripSession_(userId, { step: 'route_from', data: {} });
   sendMessageWithButtons_(chatId,
+    RESPONSE_DELAY_HINT +
     '🚕 Создание новой поездки\n\nОткуда забираем?',
     [[{ text: '🏠 Приют', callback_data: 'tw:from:shelter' }]]);
   sendMessage_(chatId, '(или напишите адрес свободным текстом)');
